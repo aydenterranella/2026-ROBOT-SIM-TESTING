@@ -188,3 +188,5 @@ compile_commands.json
 
 # Claude
 .claude
+# Generated AdvantageScope robot models (large) — see advantagescope/README.md
+advantagescope/Robot_9410_2026/*.glb

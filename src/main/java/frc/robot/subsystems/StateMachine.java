@@ -394,8 +394,10 @@ public class StateMachine extends SubsystemBase {
 
     // double velocityThreshold = TurretConstants.SHOOTER_VELOCITY_INTERPOLATOR.getInterpolatedValue(distance) - 1.5; // old — fought FireControl
     double velocityThreshold = shooterVelo - 1.5;
-    boolean shooterAtSpeed = RobotBase.isSimulation()
-        || shooter.getVelocityMotor().getRotorVelocity().getValueAsDouble() > velocityThreshold;
+    // The flywheel is physically simulated now (frc.robot.sim.MechanismSimManager), so sim uses
+    // the same at-speed check as the real robot instead of skipping it.
+    boolean shooterAtSpeed =
+        shooter.getVelocityMotor().getRotorVelocity().getValueAsDouble() > velocityThreshold;
 
     SmartDashboard.putBoolean("shooterAtSpeed", shooterAtSpeed);
     readyToFire = headingOK && shooterAtSpeed;

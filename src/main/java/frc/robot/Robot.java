@@ -28,6 +28,7 @@ import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import frc.robot.constants.ShotConstants;
 import frc.robot.sim.IntakeSim;
+import frc.robot.sim.MechanismSimManager;
 import frc.robot.subsystems.StateMachine;
 import frc.robot.subsystems.StateMachine.RobotState;
 import java.util.ArrayList;
@@ -45,6 +46,9 @@ public class Robot extends TimedRobot {
 
   /** Sim-only intake zone. Tracks held fuel and gates shot spawning. */
   private IntakeSim intakeSim = null;
+
+  /** Sim-only physics for the flywheel, feeder, spindexer, intake roller, intake wrist, and hood. */
+  private MechanismSimManager mechanismSim = null;
 
   /** Ticks until the next shot is allowed to spawn (~0.5 s @ 50 Hz). */
   private int simShotCooldown = 0;
@@ -142,14 +146,20 @@ public class Robot extends TimedRobot {
     SimulatedArena.getInstance().resetFieldForAuto();
 
     var sm = m_robotContainer.getStateMachine();
+    mechanismSim = new MechanismSimManager(sm);
+    // Only collect fuel once the intake arm has physically swung down, not the instant the
+    // state changes to INTAKING.
     intakeSim = new IntakeSim(
         sm.drivetrain.getDriveSimulation(),
-        () -> sm.getCurrentState() == RobotState.INTAKING);
+        () -> sm.getCurrentState() == RobotState.INTAKING && mechanismSim.isIntakeDeployed());
   }
 
   @Override
   public void simulationPeriodic() {
     StateMachine sm = m_robotContainer.getStateMachine();
+
+    // Step mechanism physics first so the intake-deployed check below sees this loop's arm angle.
+    if (mechanismSim != null) mechanismSim.update();
 
     // Toggle the intake zone before the arena ticks so contact detection runs with
     // the correct extended/retracted state for this frame.
@@ -253,7 +263,9 @@ public class Robot extends TimedRobot {
     } else {
       var result = sm.getLastSOTMResult();
       if (!result.isValid()) return;
-      rps = result.shooterRps();
+      // Launch at the speed the simulated flywheel is ACTUALLY spinning, not the setpoint, so
+      // shots fired during spin-up fall short like they would on the real robot.
+      rps = mechanismSim != null ? mechanismSim.getFlywheelVelocityRps() : result.shooterRps();
       tof = result.timeOfFlightSec() > 0 ? result.timeOfFlightSec() : 0.75;
       // Rear of robot = pose.getRotation() + PI (physically where the shooter points).
       headingRad = pose.getRotation().getRadians() + Math.PI;
