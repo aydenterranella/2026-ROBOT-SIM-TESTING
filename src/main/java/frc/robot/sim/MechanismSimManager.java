@@ -4,8 +4,10 @@
 
 package frc.robot.sim;
 
+import static edu.wpi.first.units.Units.Radians;
 import static frc.robot.sim.MechanismSimConstants.*;
 
+import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation3d;
 import edu.wpi.first.math.geometry.Transform3d;
@@ -21,6 +23,7 @@ import frc.robot.constants.IntakeConstants;
 import frc.robot.constants.ShooterConstants;
 import frc.robot.subsystems.StateMachine;
 import java.util.List;
+import org.ironmaple.simulation.drivesims.SwerveModuleSimulation;
 
 /**
  * Owns every mechanism sim on the robot and steps them once per loop.
@@ -33,8 +36,9 @@ import java.util.List;
  *   <li><b>SmartDashboard "Sim/SideView"</b> — a {@link Mechanism2d} side view of the robot
  *       (front is on the right). Open it in Glass/AdvantageScope to watch the intake and hood move.
  *   <li><b>NT "Sim/Mechanisms/ComponentPoses"</b> — Pose3d[] for AdvantageScope 3D "components".
- *       Index 0 = intake arm, 1 = shooter arm. These rotate each part about its pivot relative to
- *       where it is drawn in CAD, so they line up with CAD models exported in the robot frame.
+ *       Index 0 = intake arm, 1 = hood, 2 = hopper extension, 3-6 = swerve wheels FL/FR/BL/BR.
+ *       Each pose moves a part relative to where it is drawn in CAD, so they line up with the
+ *       models made by tools/advantagescope/split-robot-glb.mjs.
  *   <li><b>SmartDashboard "Sim/..."</b> numbers — simulated speeds, angles, and currents.
  * </ul>
  */
@@ -46,6 +50,8 @@ public class MechanismSimManager {
   private final ArmMechanismSim intakeWrist;
   private final ArmMechanismSim hood;
   private final List<RollerMechanismSim> rollers;
+  private final HopperSim hopper;
+  private final SwerveModuleSimulation[] swerveModules;
 
   private final StructArrayPublisher<Pose3d> componentPosePublisher =
       NetworkTableInstance.getDefault()
@@ -60,7 +66,10 @@ public class MechanismSimManager {
   private final MechanismLigament2d intakeLigament;
   private final MechanismLigament2d hoodLigament;
 
-  public MechanismSimManager(StateMachine sm) {
+  public MechanismSimManager(StateMachine sm, HopperSim hopper) {
+    this.hopper = hopper;
+    this.swerveModules = sm.drivetrain.getDriveSimulation().getModules();
+
     // ----- Things that spin -----
     flywheel =
         new RollerMechanismSim(
@@ -143,7 +152,7 @@ public class MechanismSimManager {
             .getRoot("HoodPivot", CANVAS_ROBOT_CENTER_X + HOOD_PIVOT.getX(), HOOD_PIVOT.getZ())
             .append(
                 new MechanismLigament2d(
-                    "ShooterArm", HOOD_ARM_LENGTH_M, 0, 6, new Color8Bit(Color.kLightBlue)));
+                    "Hood", HOOD_ARM_LENGTH_M, 0, 6, new Color8Bit(Color.kLightBlue)));
     SmartDashboard.putData("Sim/SideView", sideView);
   }
 
@@ -172,16 +181,50 @@ public class MechanismSimManager {
     return flywheel.getVelocityRps();
   }
 
+  /** Simulated hood position in code units (rotations) — where the hood actually is right now. */
+  public double getHoodPositionRotations() {
+    return hood.getPositionRotations();
+  }
+
+  /** Simulated spindexer speed (rotor rps). */
+  public double getSpindexerVelocityRps() {
+    return spindexer.getVelocityRps();
+  }
+
+  /** Simulated intake roller speed (rotor rps). */
+  public double getIntakeRollerVelocityRps() {
+    return intakeRoller.getVelocityRps();
+  }
+
+  /** Simulated feeder speed (rotor rps; negative = feeding toward the shooter). */
+  public double getFeederVelocityRps() {
+    return feeder.getVelocityRps();
+  }
+
   private void publishTelemetry() {
     // Mechanism2d angles are degrees, measured from +X (robot front = right side of the canvas).
     intakeLigament.setAngle(Math.toDegrees(intakeWrist.getAngleRads()));
     hoodLigament.setAngle(Math.toDegrees(hood.getAngleRads()));
 
-    componentPosePublisher.set(
-        new Pose3d[] {
-          rotateAboutPivot(INTAKE_PIVOT, intakeWrist.getAngleRads() - INTAKE_CAD_ANGLE_RAD),
-          rotateAboutPivot(HOOD_PIVOT, hood.getAngleRads() - HOOD_CAD_ANGLE_RAD)
-        });
+    Pose3d[] poses = new Pose3d[3 + swerveModules.length];
+    poses[0] = rotateAboutPivot(INTAKE_PIVOT, intakeWrist.getAngleRads() - INTAKE_CAD_ANGLE_RAD);
+    poses[1] = rotateAboutPivot(HOOD_PIVOT, hood.getAngleRads() - HOOD_CAD_ANGLE_RAD);
+    // CAD draws the hopper past its real "out" position, so shift it back to "out", then further
+    // back by however far it is from fully out.
+    poses[2] =
+        new Pose3d(
+            HOPPER_OUT_OFFSET_M - (1.0 - hopper.getExtension()) * HOPPER_TRAVEL_M,
+            0.0,
+            0.0,
+            new Rotation3d());
+    for (int i = 0; i < swerveModules.length; i++) {
+      poses[3 + i] =
+          wheelPose(
+              i,
+              swerveModules[i].getSteerAbsoluteFacing().getRadians(),
+              swerveModules[i].getDriveWheelFinalPosition().in(Radians));
+    }
+    componentPosePublisher.set(poses);
 
     for (RollerMechanismSim roller : rollers) {
       SmartDashboard.putNumber("Sim/" + roller.getName() + "/VelocityRps", roller.getVelocityRps());
@@ -203,5 +246,19 @@ public class MechanismSimManager {
   private static Pose3d rotateAboutPivot(Translation3d pivot, double deltaRad) {
     return new Pose3d(pivot, new Rotation3d(0.0, -deltaRad, 0.0))
         .transformBy(new Transform3d(pivot.unaryMinus(), new Rotation3d()));
+  }
+
+  /**
+   * Pose for swerve wheel {@code i}: spin it {@code spinRad} about its axle (as drawn in CAD), then
+   * steer it about the vertical axis through its center from its CAD heading to {@code steerRad}.
+   * The axle is up × rolling direction, so positive spin rolls the wheel forward.
+   */
+  private static Pose3d wheelPose(int i, double steerRad, double spinRad) {
+    Translation3d center = WHEEL_CENTERS[i];
+    double cadSteer = WHEEL_CAD_STEER_RAD[i];
+    Rotation3d spin =
+        new Rotation3d(VecBuilder.fill(-Math.sin(cadSteer), Math.cos(cadSteer), 0.0), spinRad);
+    Rotation3d rotation = spin.rotateBy(new Rotation3d(0.0, 0.0, steerRad - cadSteer));
+    return new Pose3d(center.minus(center.rotateBy(rotation)), rotation);
   }
 }

@@ -6,6 +6,7 @@ package frc.robot.commands;
 
 import static edu.wpi.first.units.Units.*;
 
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -196,43 +197,46 @@ public class SwerveDriveCommand extends Command {
         : 1.0;
     Pose2d targetPose = new Pose2d();
     targetPose = requestedPose;
-    if (controller.rightTrigger(0.5).getAsBoolean() && stateMachine != null
-        && stateMachine.getCurrentState() == RobotState.PASSING) {
+    // Aim off the WANTED state: the trigger binding sets it this loop, but the state machine only
+    // switches currentState on its next periodic, so checking currentState left a gap here.
+    RobotState aimState = stateMachine != null ? stateMachine.getWantedState() : null;
+    boolean shootHeld = controller.rightTrigger(0.5).getAsBoolean() && stateMachine != null;
+    if (!shootHeld) wheelsParked = false;
+    if (shootHeld && aimState == RobotState.PASSING) {
       boolean isInverted = SmartDashboard.getBoolean("driveInverted", false);
       double inversionMultiplier = isInverted ? -1.0 : 1.0;
       final ChassisSpeeds speeds = DriveUtil.calculateSpeedsBasedOnJoystickInputs(
           controller, drivetrain, MAX_ANGULAR_RATE, SKEW_COMPENSATION);
-      double xSpeed = speeds.vxMetersPerSecond * OIConstants.MAX_SPEED_COEFFICIENT * inversionMultiplier;
-      double ySpeed = speeds.vyMetersPerSecond * OIConstants.MAX_SPEED_COEFFICIENT * inversionMultiplier;
-      double aimDeg = stateMachine.getPassAimAngleDeg();
+      double xSpeed = speeds.vxMetersPerSecond * OIConstants.MAX_SPEED_COEFFICIENT * inversionMultiplier * SLOW_DRIVE_SPEED;
+      double ySpeed = speeds.vyMetersPerSecond * OIConstants.MAX_SPEED_COEFFICIENT * inversionMultiplier * SLOW_DRIVE_SPEED;
+      double fieldAimDeg = stateMachine.getPassAimAngleDeg();
+      double aimDeg = fieldAimDeg;
       // CTRE operator perspective adds 180° for Red in ROTATION_LOCK; subtract to avoid double-inversion.
       if (!stateMachine.isBlueAlliance()) aimDeg -= 180.0;
       SmartDashboard.putNumber("aimDeg", aimDeg);
       SmartDashboard.putBoolean("usingSOTM", false);
       SmartDashboard.putNumber("robotHeadingDeg", drivetrain.getState().Pose.getRotation().getDegrees());
-      drivetrain.drive(xSpeed, ySpeed, aimDeg, DriveMode.ROTATION_LOCK);
-    } else if (controller.rightTrigger(0.5).getAsBoolean() && stateMachine != null
-        && stateMachine.getCurrentState() == RobotState.SHOOTING) {
+      driveAimed(xSpeed, ySpeed, fieldAimDeg, aimDeg);
+    } else if (shootHeld && aimState == RobotState.SHOOTING) {
       boolean isInverted = SmartDashboard.getBoolean("driveInverted", false);
       double inversionMultiplier = isInverted ? -1.0 : 1.0;
       final ChassisSpeeds speeds = DriveUtil.calculateSpeedsBasedOnJoystickInputs(
           controller, drivetrain, MAX_ANGULAR_RATE, SKEW_COMPENSATION);
-      double xSpeed = speeds.vxMetersPerSecond * OIConstants.MAX_SPEED_COEFFICIENT * inversionMultiplier;
-      double ySpeed = speeds.vyMetersPerSecond * OIConstants.MAX_SPEED_COEFFICIENT * inversionMultiplier;
+      double xSpeed = speeds.vxMetersPerSecond * OIConstants.MAX_SPEED_COEFFICIENT * inversionMultiplier * SLOW_DRIVE_SPEED;
+      double ySpeed = speeds.vyMetersPerSecond * OIConstants.MAX_SPEED_COEFFICIENT * inversionMultiplier * SLOW_DRIVE_SPEED;
 
       var sotmResult = stateMachine.getLastSOTMResult();
       boolean usingSOTM = sotmResult.isValid();
-      double aimDeg = usingSOTM
+      double fieldAimDeg = usingSOTM
           ? sotmResult.driveAngle().getDegrees()
           : stateMachine.getStaticAimAngleDeg();
+      double aimDeg = fieldAimDeg;
       // CTRE operator perspective adds 180° for Red in ROTATION_LOCK; subtract to avoid double-inversion.
       if (!stateMachine.isBlueAlliance()) aimDeg -= 180.0;
       SmartDashboard.putNumber("aimDeg", aimDeg);
       SmartDashboard.putBoolean("usingSOTM", usingSOTM);
       SmartDashboard.putNumber("robotHeadingDeg", drivetrain.getState().Pose.getRotation().getDegrees());
-      drivetrain.drive(xSpeed, ySpeed, aimDeg, DriveMode.ROTATION_LOCK);
-    } else if (controller.rightTrigger(0.5).getAsBoolean()) {
-      drivetrain.drive(0.0, 0.0, 0.0, DriveMode.BRAKE);
+      driveAimed(xSpeed, ySpeed, fieldAimDeg, aimDeg);
     } else if (currentPose != null && targetPose != null && (autoDrive || requestedPose != null)) {
       boolean isBlueAlliance = DriverStation.getAlliance().orElse(Alliance.Blue) == Alliance.Blue;
       final double directionMultiplier = isBlueAlliance ? -1.0 : 1.0;
@@ -268,9 +272,8 @@ public class SwerveDriveCommand extends Command {
       double ySpeed = speeds.vyMetersPerSecond * coeff;
 
       if (controller.leftTrigger(0.5).getAsBoolean()) {
-        final double DRIVE_AND_INTAKE_SPEED = 0.4;
-        xSpeed = xSpeed * DRIVE_AND_INTAKE_SPEED;
-        ySpeed = ySpeed * DRIVE_AND_INTAKE_SPEED;
+        xSpeed = xSpeed * SLOW_DRIVE_SPEED;
+        ySpeed = ySpeed * SLOW_DRIVE_SPEED;
       }
 
       boolean isInverted = SmartDashboard.getBoolean("driveInverted", false);
@@ -282,6 +285,32 @@ public class SwerveDriveCommand extends Command {
           ySpeed * inversionMultiplier,
           -speeds.omegaRadiansPerSecond,
           Swerve.DriveMode.FIELD_RELATIVE);
+    }
+  }
+
+  /**
+   * Drives while holding the aim heading. Turning in place leaves the wheels angled around the
+   * robot (it looks like an X), and they'd stay that way once the turn finishes. So when the
+   * driver isn't translating and the robot is on target, park the wheels straight instead, and
+   * only go back to heading control if the heading drifts past AIM_RELEASE_DEG.
+   *
+   * @param fieldAimDeg heading to aim at, field frame (what the state machine checks)
+   * @param requestAimDeg same heading, adjusted for CTRE's operator perspective
+   */
+  private void driveAimed(double xSpeed, double ySpeed, double fieldAimDeg, double requestAimDeg) {
+    double errorDeg = Math.abs(MathUtil.inputModulus(
+        drivetrain.getState().Pose.getRotation().getDegrees() - fieldAimDeg, -180.0, 180.0));
+    // Same translational deadband the AIM request uses: below it the robot isn't moving.
+    boolean stopped = Math.hypot(xSpeed, ySpeed) < Swerve.AIM_TRANSLATION_DEADBAND_MPS;
+    if (!stopped || errorDeg > AIM_RELEASE_DEG) {
+      wheelsParked = false;
+    } else if (errorDeg < AIM_PARK_DEG) {
+      wheelsParked = true;
+    }
+    if (wheelsParked) {
+      drivetrain.drive(0.0, 0.0, 0.0, DriveMode.WHEELS_STRAIGHT);
+    } else {
+      drivetrain.drive(xSpeed, ySpeed, requestAimDeg, DriveMode.AIM);
     }
   }
 
@@ -328,6 +357,21 @@ public class SwerveDriveCommand extends Command {
     final double tolerance = poseTolerance > 0 ? poseTolerance : 1;
     return linearDistance < Units.inchesToMeters(tolerance) && (Math.abs(linearRotation) < 10 || disableRotationLock);
   }
+
+  /** Drive speed multiplier while intaking, shooting, or passing, so the driver can line up. */
+  private static final double SLOW_DRIVE_SPEED = 0.4;
+
+  /**
+   * Stopped and aimed within this many degrees → park the wheels straight. Just above where the
+   * heading controller's rotational deadband stops turning (~4°), well inside the 15° fire window.
+   */
+  private static final double AIM_PARK_DEG = 5.0;
+
+  /** Parked wheels go back to heading control if the heading drifts past this. */
+  private static final double AIM_RELEASE_DEG = 8.0;
+
+  /** True while stopped on target with the wheels parked straight (see driveAimed). */
+  private boolean wheelsParked = false;
 
   /**
    * Distance (m) inward from each side when targeting a corner (field: blue right

@@ -25,6 +25,7 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.firecontrol.ShotCalculator;
 import frc.lib.team9410.PowerRobotContainer;
+import frc.robot.sim.VisionSim;
 import frc.lib.team9410.subsystems.PositionSubsystem;
 import frc.lib.team9410.subsystems.VelocitySubsystem;
 import frc.lib.team9410.subsystems.VelocityTorqueSubsystem;
@@ -150,9 +151,9 @@ public class StateMachine extends SubsystemBase {
   // }
 
   public void setRobotPose () {
-    // In simulation, MapleSim/CTRE provide odometry truth. Vision fusion can introduce
-    // jitter when no simulated Limelight pipeline is configured.
-    if (RobotBase.isSimulation()) {
+    // In simulation, VisionSim fakes the three Limelights so this runs like the real robot. With
+    // its FuseIntoOdometry toggle off, odometry is synced to MapleSim's true pose instead.
+    if (RobotBase.isSimulation() && !VisionSim.isFusionEnabled()) {
       SmartDashboard.putNumber("currentPoseX", drivetrain.getState().Pose.getX());
       SmartDashboard.putNumber("currentPoseY", drivetrain.getState().Pose.getY());
       SmartDashboard.putNumber("currentPoseYaw", drivetrain.getState().Pose.getRotation().getDegrees());
@@ -186,7 +187,7 @@ public class StateMachine extends SubsystemBase {
           // System.out.println(matchStarted);
           if (!gyroReset || !matchStarted) {
             // newPose = new Pose2d(newPose.getX(), newPose.getY(), drivetrain.getState().Pose.getRotation());
-            drivetrain.resetPose(newPose);
+            drivetrain.resetEstimatedPose(newPose);
             gyroReset = true;
           }
           // else {
@@ -211,6 +212,11 @@ public class StateMachine extends SubsystemBase {
       previousState = currentState;
       if (canTransitionTo(wantedState)) {
         currentState = wantedState;
+        // Letting go of intake lifts the arm back to idle. Done once on the transition, not every
+        // loop in READY, so autos can still hold the intake down while READY.
+        if (previousState == RobotState.INTAKING && currentState == RobotState.READY) {
+          intakeWrist.setPositionRotations(Constants.Intake.INTAKE_IDLE);
+        }
       }
     }
   }

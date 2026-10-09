@@ -31,7 +31,8 @@ public class FieldConstants {
   public static final Translation2d NEU_BOTTOM_LEFT = new Translation2d(5.872, 0.595);
   public static final Translation2d NEU_BOTTOM_RIGHT = new Translation2d(10.692, 0.595);
 
-  public static final Translation2d HOPPER_RED = new Translation2d(11.5,4); 
+  // Red hub mirrors blue across the field (16.541 m long): 16.541 - 4.62 = 11.92.
+  public static final Translation2d HOPPER_RED = new Translation2d(11.92,4);
   public static final Translation2d HOPPER_BLUE = new Translation2d(4.62,4);
   
   public static final double MAX_DISTANCE_TO_HOPPER =  5.406;

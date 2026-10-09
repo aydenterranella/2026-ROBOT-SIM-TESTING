@@ -4,47 +4,62 @@
 
 package frc.robot.sim;
 
-import static edu.wpi.first.units.Units.Meters;
+import static frc.robot.sim.MechanismSimConstants.*;
 
+import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Translation2d;
+import edu.wpi.first.math.geometry.Translation3d;
 import java.util.function.BooleanSupplier;
-import org.ironmaple.simulation.IntakeSimulation;
-import org.ironmaple.simulation.IntakeSimulation.IntakeSide;
+import org.ironmaple.simulation.SimulatedArena;
 import org.ironmaple.simulation.drivesims.SwerveDriveSimulation;
+import org.ironmaple.simulation.gamepieces.GamePieceOnFieldSimulation;
 
 /**
- * MapleSim intake zone gated by a state-machine boolean.
+ * Sim intake: picks fuel up off the field and hands it to {@link FuelPathSim}, which carries it
+ * through the robot.
  *
- * <p>Front-of-robot in-frame intake, 0.6&nbsp;m wide, capacity 10 fuel balls. Tick
- * {@link #update()} from {@code Robot.simulationPeriodic()}; when the supplier is true,
- * the intake zone is extended and collects fuel the robot drives over.
- * {@link #getHeldCount()} is the sim source of truth for "has fuel", and
- * {@link #consume()} removes the held piece when a shot is spawned.
+ * <p>MapleSim's own intake swallows every ball the instant it touches a zone at the bumper. This one
+ * instead only takes fuel sitting under the deployed rollers (out past the bumper), only while the
+ * {@code intakeActive} supplier says the arm is down and the rollers are spinning, and no faster
+ * than {@link MechanismSimConstants#INTAKE_BALLS_PER_SECOND}. Fuel it can't take yet stays on the
+ * field and gets shoved by the bumper, like a jam.
  */
 public class IntakeSim {
-  private final IntakeSimulation intakeSim;
+  private final SwerveDriveSimulation driveSim;
+  private final FuelPathSim fuelPath;
   private final BooleanSupplier intakeActive;
 
-  public IntakeSim(SwerveDriveSimulation driveSim, BooleanSupplier intakeActive) {
+  /** Pickups banked toward the next ball (rate limit). */
+  private double pickupAllowance = 0.0;
+
+  public IntakeSim(SwerveDriveSimulation driveSim, FuelPathSim fuelPath, BooleanSupplier intakeActive) {
+    this.driveSim = driveSim;
+    this.fuelPath = fuelPath;
     this.intakeActive = intakeActive;
-    this.intakeSim =
-        IntakeSimulation.InTheFrameIntake(
-            "Fuel", driveSim, Meters.of(0.6), IntakeSide.FRONT, 30);
   }
 
+  /** Call once per {@code simulationPeriodic()}, before the arena steps. */
   public void update() {
-    if (intakeActive.getAsBoolean()) {
-      intakeSim.startIntake();
-    } else {
-      intakeSim.stopIntake();
+    if (!intakeActive.getAsBoolean()) {
+      pickupAllowance = 0.0;
+      return;
     }
-  }
+    // Bank at most one ball's worth so it can't save up a burst while nothing is in reach.
+    pickupAllowance = Math.min(1.0, pickupAllowance + LOOP_PERIOD_SECS * INTAKE_BALLS_PER_SECOND);
 
-  public int getHeldCount() {
-    return intakeSim.getGamePiecesAmount();
-  }
+    Pose2d robot = driveSim.getSimulatedDriveTrainPose();
+    for (GamePieceOnFieldSimulation piece : SimulatedArena.getInstance().gamePiecesOnField()) {
+      if (pickupAllowance < 1.0 || !fuelPath.hasRoom()) break;
+      if (!"Fuel".equals(piece.getType())) continue;
+      Translation2d rel = piece.getPoseOnField().getTranslation().minus(robot.getTranslation())
+          .rotateBy(robot.getRotation().unaryMinus());
+      boolean underRollers = rel.getX() >= INTAKE_ZONE_MIN_X_M && rel.getX() <= INTAKE_ZONE_MAX_X_M
+          && Math.abs(rel.getY()) <= INTAKE_ZONE_HALF_WIDTH_M;
+      if (!underRollers) continue;
 
-  /** Removes one held piece. Returns true if a piece was consumed. */
-  public boolean consume() {
-    return intakeSim.obtainGamePieceFromIntake();
+      SimulatedArena.getInstance().removeGamePiece(piece);
+      fuelPath.addFromIntake(new Translation3d(rel.getX(), rel.getY(), FUEL_RADIUS_M));
+      pickupAllowance -= 1.0;
+    }
   }
 }

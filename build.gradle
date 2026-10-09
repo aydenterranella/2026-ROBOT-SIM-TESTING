@@ -81,6 +81,9 @@ dependencies {
 test {
     useJUnitPlatform()
     systemProperty 'junit.jupiter.extensions.autodetection.enabled', 'true'
+    // The sim tests share global state (HAL, NetworkTables, MapleSim's arena, sim clock), and a
+    // full Robot leaves notifiers behind that hang SimHooks.stepTiming. One JVM per test class.
+    forkEvery = 1
 }
 
 // Simulation configuration (e.g. environment variables).

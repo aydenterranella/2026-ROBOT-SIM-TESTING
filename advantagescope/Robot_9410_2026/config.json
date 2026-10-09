@@ -1,17 +1,109 @@
 {
   "name": "9410 2026 Robot",
   "isFTC": false,
-  "rotations": [{ "axis": "z", "degrees": 90 }],
-  "position": [0, -0.43299, 0],
+  "rotations": [
+    {
+      "axis": "z",
+      "degrees": 90
+    }
+  ],
+  "position": [
+    0,
+    -0.43299,
+    0
+  ],
   "cameras": [],
   "components": [
     {
-      "zeroedRotations": [{ "axis": "z", "degrees": 90 }],
-      "zeroedPosition": [0, -0.43299, 0]
+      "zeroedRotations": [
+        {
+          "axis": "z",
+          "degrees": 90
+        }
+      ],
+      "zeroedPosition": [
+        0,
+        -0.43299,
+        0
+      ]
     },
     {
-      "zeroedRotations": [{ "axis": "z", "degrees": 90 }],
-      "zeroedPosition": [0, -0.43299, 0]
+      "zeroedRotations": [
+        {
+          "axis": "z",
+          "degrees": 90
+        }
+      ],
+      "zeroedPosition": [
+        0,
+        -0.43299,
+        0
+      ]
+    },
+    {
+      "zeroedRotations": [
+        {
+          "axis": "z",
+          "degrees": 90
+        }
+      ],
+      "zeroedPosition": [
+        0,
+        -0.43299,
+        0
+      ]
+    },
+    {
+      "zeroedRotations": [
+        {
+          "axis": "z",
+          "degrees": 90
+        }
+      ],
+      "zeroedPosition": [
+        0,
+        -0.43299,
+        0
+      ]
+    },
+    {
+      "zeroedRotations": [
+        {
+          "axis": "z",
+          "degrees": 90
+        }
+      ],
+      "zeroedPosition": [
+        0,
+        -0.43299,
+        0
+      ]
+    },
+    {
+      "zeroedRotations": [
+        {
+          "axis": "z",
+          "degrees": 90
+        }
+      ],
+      "zeroedPosition": [
+        0,
+        -0.43299,
+        0
+      ]
+    },
+    {
+      "zeroedRotations": [
+        {
+          "axis": "z",
+          "degrees": 90
+        }
+      ],
+      "zeroedPosition": [
+        0,
+        -0.43299,
+        0
+      ]
     }
   ]
 }

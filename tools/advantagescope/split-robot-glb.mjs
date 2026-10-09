@@ -1,11 +1,16 @@
 // Splits the full-robot GLB exported from Onshape into the separate models AdvantageScope needs:
 //
 //   model.glb    everything that doesn't move relative to the chassis
-//   model_0.glb  intake arm   (component 0 — rotates about the intake pivot)
-//   model_1.glb  shooter arm  (component 1 — rotates about the flywheel axle)
+//   model_0.glb  intake arm        (component 0 — rotates about the intake pivot)
+//   model_1.glb  shooter hood      (component 1 — rotates about the flywheel axle)
+//   model_2.glb  hopper extension  (component 2 — slides forward along +X)
+//   model_3.glb  FL swerve wheel   (components 3-6 — steer about the module's vertical axis and
+//   model_4.glb  FR swerve wheel    spin about the axle)
+//   model_5.glb  BL swerve wheel
+//   model_6.glb  BR swerve wheel
 //
-// The component order must match the Pose3d[] published on "Sim/Mechanisms/ComponentPoses" by
-// frc.robot.sim.MechanismSimManager.
+// It also writes config.json next to the models. The component order must match the Pose3d[]
+// published on "Sim/Mechanisms/ComponentPoses" by frc.robot.sim.MechanismSimManager.
 //
 // HOW TO RE-RUN AFTER A CAD CHANGE
 //   1. In Onshape, open "Main Assembly" → Export → Format: GLB, leave "Y axis up" UNCHECKED,
@@ -13,13 +18,15 @@
 //   2. node tools/advantagescope/split-robot-glb.mjs "<path to Main Assembly.glb>" advantagescope/Robot_9410_2026
 //   3. Copy the output folder into AdvantageScope's assets folder
 //      (AdvantageScope → Help → Show Assets Folder), then restart AdvantageScope.
+//   4. If the script prints different swerve wheel numbers than WHEEL_* in
+//      src/main/java/frc/robot/sim/MechanismSimConstants.java, update those constants.
 //
 // No npm packages needed — this only reads/writes the GLB container format directly.
 //
 // HOW PARTS ARE SORTED
 // Onshape's export loses instance numbers in part names ("Part 1" appears dozens of times), so we
-// sort parts by WHERE they are (bounding box in robot coordinates) plus a short list of
-// exceptions keyed by Onshape instance ID (stable across re-exports, unlike node order).
+// sort parts by WHERE they are (bounding box in robot coordinates) plus lists keyed by Onshape
+// instance ID (stable across re-exports, unlike node order).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,23 +57,60 @@ const INTAKE_FIXED_IDS = new Set([
   'MgiexC97tB5MW6Zeo', // screw
 ]);
 
-/** Shooter arm: everything in the "Shooter V2 <1>" subassembly EXCEPT these fixed parts. */
+/**
+ * Shooter hood: the inner body of "Shooter V2". Two narrow truss links ride on the flywheel axle
+ * and carry the two upper roller shafts plus the 190t gear sectors (tooth tips sit 9.6" from the
+ * flywheel axle). The hood motor and its 10t pinion are on the FIXED outer side plates, so the
+ * pinion drives the sectors and the whole inner body swings about the flywheel axle.
+ */
+const HOOD_IDS = new Set([
+  'M6bh6uQHQrlT+PJA3', 'Man9zclAzdkvAVS9+', // narrow truss links ("Part 3")
+  'MBYcm6NQ4KPoSLouP', 'MCDxd2Y5QAUgpuCR0', // 190t gear sectors
+  'Mi4yAAunE2iVzqRum', 'M4af3OST5gOqElZ4g', // spacer plates between the sectors
+  'McYZDbxKoLRGUFt9j', 'MvPz7e2rVjlej1x4g', 'M05jDAAa+nlY/MU/T', // sector standoffs
+  'Mti3MzRAFHA8fRjj/', 'MbjpD9G3eG0bb77BK', // upper roller shaft + roller
+  'MIKM80QBr+ac7H+uO', // lower roller shaft
+  'Mj+0aGc7VUvDkO0iA', 'ME0gJXnmStPCyfNkv', // 20t / 38t gears between the two roller shafts
+  'M6hpKt0vft1r3CAZv', 'MGlmzt77BMFGQhqIN', // 24t pulleys on the lower roller shaft
+  'MplDGshjBfUuy5x/w', 'MxBNzwG+w8Nzec3fE', // 110T belts (flywheel axle → lower roller)
+  'MoYLJFyKNmkw6rgRR', 'IKFthNu+plzBeNr5p', 'IBeNFX2D2i4qjvSQr', 'IuBC1WG2Qi7mMxaha', // bearings
+  'I/ge4T5lKy8t1LMfl', 'IBu57JRIDpxCGFYgM', 'ICkB9aMiNMOmCkppM', 'I23aJ55tTctgL0rQP',
+  'Mf+sKHTibbgHtYMd8', 'M5nKMiL0ohc1qh0OE', 'MHshUXjS7KP6PHNzR', 'M2qMcVd0PvZBtF59j', // spacers
+  'MzChha1YMssUZxyfK', 'Myum3arAUQvIPTpRH', 'Mj8+KDbjJirn8Umzk', 'M7fHLkhpNaH1c1//i',
+  'MGru7VseeVNCnr7ZR', 'MdhkmQ09zUXSECJO2',
+  'IWjE6Fr6hqjXmk48x', 'Ibi77cHMisU7hNsk6', 'I+v4ELXYIsV81UK05', 'I/OFN9/3o03DvZGZ5', // link screws
+  'Ir8aTR/LYhJcAEFdH', 'I7FC2SKg9nBMKXugY', 'Iz4/a64fQAD7hWKVH', 'IiQAXeRzECY9Cj3pC',
+  'MyVX0UsBznkJXeUJ3', 'MHQnuD4K1zSyqDwBZ', // shaft end screws
+]);
 const SHOOTER_SUBASSEMBLY = 'Shooter V2 <1>';
-const SHOOTER_FIXED_IDS = new Set([
-  'MtvBH30jG1CqAuWgb', // baseplate
-  'MCDxd2Y5QAUgpuCR0', 'MBYcm6NQ4KPoSLouP', // 190t gear sectors (the pinion climbs these)
-  'McYZDbxKoLRGUFt9j', 'MvPz7e2rVjlej1x4g', 'MbjpD9G3eG0bb77BK', 'M05jDAAa+nlY/MU/T', // sector spacers
-  'Mi4yAAunE2iVzqRum', 'M4af3OST5gOqElZ4g', 'M/XmFvvhwM95Lm8oO', // sector mounts
-  'MYjOWT9FIHaJWEOLY', // hood WCP Through Bore Encoder
-  'MTY3F0TodM0E5KPxr', 'M5V06ZMIWdCPD8dJX', // encoder bracket
-  'MlvpjqPw0uRxB7Cqj', 'MpWkN/kmcP6auBSTu', // encoder shaft + 24t gear
-  'MeeryRzsqRsNm9Oca', 'MtMIFDZfgsAvZQoo8', 'MI3kxNLs7lB/kN1gr', // encoder shaft bushings/spacer
+
+/**
+ * Hopper extension: the outer box (two side walls, front wall, nut strips) that slides forward
+ * over the deployed intake. The CAD draws it fully extended.
+ */
+const HOPPER_IDS = new Set([
+  'MpZULS2ip9qMB6CZN', 'MRYkGVmbQtf6JsqUl', // side walls
+  'MRTqL43/k29tPqyiK', // front wall
+  'MYMOPR2+St65j6zuU', 'MXYmDW0Oxs7IKFDdv', 'MPvwlpcPggFPIeXsq', 'MebIBjurmrVzY3fMm', // nut strips
 ]);
 
-/** CAD-only helper geometry that shouldn't be drawn at all. */
+/** Parts that shouldn't be drawn at all. */
 const SKIP_IDS = new Set([
-  'MCjYC3L7/8IVFhuXs', // Limelight field-of-view cone (the gray pyramid off the back)
+  'MArO9ax+VvjWWOR/K', 'MTnyU2kiTHgO3Gjrv', // fuel balls sitting in the CAD (sim draws real ones)
+  'MFmHKN/FWRjyAGhsc', // stray part floating ~21" off the robot's right side, next to the intake
+  'M9a9+YSicYzUgKYgb', // stray 1.5" spacer floating ~16.5" off the robot's right side
 ]);
+
+/**
+ * Limelight subassemblies. Each one carries a field-of-view pyramid: an unnamed mesh that shares
+ * the Limelight's instance ID. Only that unnamed mesh is skipped; the camera body stays.
+ */
+const LIMELIGHT_IDS = new Set(['MCjYC3L7/8IVFhuXs', 'MIdNYZeD+J8lJANF5', 'MDBHNxrH0Zpx8JGAI']);
+
+/** Swerve modules are one merged mesh each; the wheel is cut out of it by geometry. */
+const SWERVE_SUBASSEMBLY_PREFIX = 'WCP Swerve X2';
+/** The wheel tread's material (light blue-gray) — used to find the wheel inside each module. */
+const TREAD_MATERIAL_PREFIX = '0.811765_0.858824_0.898039';
 
 /**
  * Onshape's GLB export drops part transparency, so the polycarbonate panels come out solid gray.
@@ -79,6 +123,12 @@ const POLYCARB_MATERIAL = {
   doubleSided: true,
   alphaMode: 'BLEND',
   pbrMetallicRoughness: { baseColorFactor: [0.82, 0.88, 0.95, 0.3], metallicFactor: 0, roughnessFactor: 0.2 },
+};
+
+/** AdvantageScope transform that puts the CAD frame into the robot frame (see top of file). */
+const ZEROED = {
+  rotations: [{ axis: 'z', degrees: 90 }],
+  position: [0, -CAD_CENTERLINE_X_M, 0],
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -146,13 +196,73 @@ function boundsInches(json, meshIndex, world) {
   return { lo, hi };
 }
 
+/** Every vertex of one primitive, in robot-frame inches. */
+function primVertsInches(json, bin, prim, world) {
+  const acc = json.accessors[prim.attributes.POSITION];
+  const view = json.bufferViews[acc.bufferView];
+  const offset = (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+  const stride = view.byteStride ?? 12;
+  const out = [];
+  for (let i = 0; i < acc.count; i++) {
+    const o = offset + i * stride;
+    out.push(cadToRobotInches(apply(world, [bin.readFloatLE(o), bin.readFloatLE(o + 4), bin.readFloatLE(o + 8)])));
+  }
+  return out;
+}
+
+/**
+ * Finds the wheel inside one merged swerve-module mesh. Returns the primitive indices that belong
+ * to the wheel plus the wheel's center and axle direction (robot frame).
+ */
+function findWheel(json, bin, meshIndex, world) {
+  const prims = json.meshes[meshIndex].primitives;
+  const tread = prims
+    .map((p, k) => k)
+    .filter((k) => json.materials[prims[k].material]?.name?.startsWith(TREAD_MATERIAL_PREFIX));
+  if (tread.length === 0) throw new Error('Swerve module has no tread material; update TREAD_MATERIAL_PREFIX');
+  const treadVerts = tread.flatMap((k) => primVertsInches(json, bin, prims[k], world));
+
+  const lo = [0, 1, 2].map((j) => Math.min(...treadVerts.map((v) => v[j])));
+  const hi = [0, 1, 2].map((j) => Math.max(...treadVerts.map((v) => v[j])));
+  const center = [0, 1, 2].map((j) => (lo[j] + hi[j]) / 2);
+
+  // The axle is horizontal: it's the minor axis of the tread's footprint in XY.
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const v of treadVerts) {
+    const dx = v[0] - center[0], dy = v[1] - center[1];
+    sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+  }
+  const majorAngle = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const axle = [-Math.sin(majorAngle), Math.cos(majorAngle), 0];
+
+  const axial = (v) => (v[0] - center[0]) * axle[0] + (v[1] - center[1]) * axle[1];
+  const radial = (v) => {
+    const a = axial(v);
+    return Math.hypot(v[0] - center[0] - a * axle[0], v[1] - center[1] - a * axle[1], v[2] - center[2]);
+  };
+  const halfWidth = Math.max(...treadVerts.map((v) => Math.abs(axial(v))));
+  const radius = Math.max(...treadVerts.map(radial));
+
+  // A primitive is part of the wheel if all of it sits inside the tread's cylinder.
+  const wheelPrims = new Set();
+  prims.forEach((p, k) => {
+    const verts = primVertsInches(json, bin, p, world);
+    if (verts.every((v) => Math.abs(axial(v)) <= halfWidth * 1.2 + 0.05 && radial(v) <= radius + 0.05)) {
+      wheelPrims.add(k);
+    }
+  });
+  return { wheelPrims, center, axle, radius };
+}
+
 // ---------------------------------------------------------------------------------------------
-// Classify every mesh node as 'base', 'intake', or 'shooter'
+// Classify every mesh node. Result: node index -> category, or node index -> Map(category -> prim
+// indices) for swerve modules, which are split between the chassis and a wheel.
 // ---------------------------------------------------------------------------------------------
-function classify(json) {
-  const result = new Map(); // mesh node index -> category
+function classify(json, bin) {
+  const result = new Map();
   const polycarbMeshes = new Set(); // mesh indices to recolor as clear polycarbonate
-  const walk = (index, parentWorld, subassembly, instanceId) => {
+  const wheels = []; // { node, wheelPrims, center, axle, radius }
+  const walk = (index, parentWorld, subassembly, instanceId, inSwerve) => {
     const node = json.nodes[index];
     const world = node.matrix ? mul(parentWorld, node.matrix) : parentWorld;
     const meta = node.extensions?.PTC_onshape_metadata;
@@ -160,6 +270,7 @@ function classify(json) {
     // Remember the top-level subassembly ("Main <1>", "Shooter V2 <1>") we're inside of.
     const isSubassembly = node.mesh === undefined && !String(node.name).startsWith('occurrence of');
     const sub = subassembly ?? (index !== json.scenes[0].nodes[0] && isSubassembly ? node.name : null);
+    const swerve = inSwerve || (isSubassembly && String(node.name).startsWith(SWERVE_SUBASSEMBLY_PREFIX));
 
     if (node.mesh !== undefined) {
       let category = 'base';
@@ -168,10 +279,15 @@ function classify(json) {
         const dims = [0, 1, 2].map((k) => hi[k] - lo[k]).sort((a, b) => a - b);
         if (dims[0] <= POLYCARB.maxThicknessIn && dims[2] >= POLYCARB.minSpanIn) polycarbMeshes.add(node.mesh);
       }
-      if (SKIP_IDS.has(id)) {
+      if (SKIP_IDS.has(id) || (LIMELIGHT_IDS.has(id) && !node.name)) {
         category = 'skip';
+      } else if (swerve) {
+        wheels.push({ node: index, ...findWheel(json, bin, node.mesh, world) });
+        category = null; // filled in below once the wheels are sorted FL/FR/BL/BR
+      } else if (HOPPER_IDS.has(id)) {
+        category = 'hopper';
       } else if (sub === SHOOTER_SUBASSEMBLY) {
-        category = SHOOTER_FIXED_IDS.has(id) ? 'base' : 'shooter';
+        category = HOOD_IDS.has(id) ? 'hood' : 'base';
       } else if ((sub === 'Main <1>' || sub === null) && !INTAKE_FIXED_IDS.has(id)) {
         // sub === null: parts inserted directly into the top-level Main Assembly (a few intake
         // roller pulleys live there instead of inside "Main <1>").
@@ -179,12 +295,27 @@ function classify(json) {
         const b = INTAKE_BOX_IN;
         if (lo[0] >= b.xMin && hi[0] <= b.xMax && lo[2] >= b.zMin && hi[2] <= b.zMax) category = 'intake';
       }
-      result.set(index, category);
+      if (category) result.set(index, category);
     }
-    for (const child of node.children ?? []) walk(child, world, sub, id);
+    for (const child of node.children ?? []) walk(child, world, sub, id, swerve);
   };
-  for (const root of json.scenes[0].nodes) walk(root, IDENTITY, null, null);
-  return { categories: result, polycarbMeshes };
+  for (const root of json.scenes[0].nodes) walk(root, IDENTITY, null, null, false);
+
+  // Order the wheels FL, FR, BL, BR (front = +X, left = +Y), matching the CTRE module order.
+  if (wheels.length !== 4) throw new Error(`expected 4 swerve modules, found ${wheels.length}`);
+  const order = (w) => (w.center[0] > 0 ? 0 : 2) + (w.center[1] > 0 ? 0 : 1);
+  wheels.sort((a, b) => order(a) - order(b));
+  wheels.forEach((w, i) => {
+    const allPrims = json.meshes[json.nodes[w.node].mesh].primitives.map((p, k) => k);
+    result.set(
+      w.node,
+      new Map([
+        ['base', new Set(allPrims.filter((k) => !w.wheelPrims.has(k)))],
+        [`wheel${i}`, w.wheelPrims],
+      ]),
+    );
+  });
+  return { categories: result, polycarbMeshes, wheels };
 }
 
 /** Points every primitive of the given meshes at a new see-through material. */
@@ -195,7 +326,8 @@ function applyPolycarb(json, meshIndices) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Build a pruned copy of the GLB containing only the mesh nodes in `keep`
+// Build a pruned copy of the GLB. `keep` maps mesh node index -> null (whole mesh) or a Set of the
+// primitive indices to keep.
 // ---------------------------------------------------------------------------------------------
 function extract(json, bin, keep) {
   const out = { ...json };
@@ -245,27 +377,30 @@ function extract(json, bin, keep) {
     }
     return accMap.get(a);
   };
-  const mapMesh = (m) => {
-    if (!meshMap.has(m)) {
+  const mapMesh = (m, prims) => {
+    const key = prims ? `${m}:${[...prims].sort((a, b) => a - b).join(',')}` : `${m}`;
+    if (!meshMap.has(key)) {
       const mesh = json.meshes[m];
-      meshMap.set(m, newMeshes.length);
+      meshMap.set(key, newMeshes.length);
       newMeshes.push({
         ...mesh,
-        primitives: mesh.primitives.map((p) => ({
-          ...p,
-          attributes: Object.fromEntries(Object.entries(p.attributes).map(([k, a]) => [k, mapAccessor(a)])),
-          ...(p.indices !== undefined ? { indices: mapAccessor(p.indices) } : {}),
-        })),
+        primitives: mesh.primitives
+          .filter((p, k) => !prims || prims.has(k))
+          .map((p) => ({
+            ...p,
+            attributes: Object.fromEntries(Object.entries(p.attributes).map(([k, a]) => [k, mapAccessor(a)])),
+            ...(p.indices !== undefined ? { indices: mapAccessor(p.indices) } : {}),
+          })),
       });
     }
-    return meshMap.get(m);
+    return meshMap.get(key);
   };
 
   out.nodes = [...keepNode.entries()].map(([old, kids]) => {
     const n = { ...json.nodes[old], children: kids.map((k) => nodeMap.get(k)) };
     if (n.children.length === 0) delete n.children;
     if (n.mesh !== undefined) {
-      if (keep.has(old)) n.mesh = mapMesh(n.mesh);
+      if (keep.has(old)) n.mesh = mapMesh(n.mesh, keep.get(old));
       else delete n.mesh;
     }
     return n;
@@ -289,15 +424,49 @@ if (!input || !outDir) {
   process.exit(1);
 }
 const { json, bin } = readGlb(input);
-const { categories, polycarbMeshes } = classify(json);
+const { categories, polycarbMeshes, wheels } = classify(json, bin);
 applyPolycarb(json, polycarbMeshes);
 console.log(`polycarbonate sheets: ${polycarbMeshes.size} meshes made see-through`);
 fs.mkdirSync(outDir, { recursive: true });
 
-const outputs = { base: 'model.glb', intake: 'model_0.glb', shooter: 'model_1.glb' };
-for (const [category, file] of Object.entries(outputs)) {
-  const keep = new Set([...categories].filter(([, c]) => c === category).map(([i]) => i));
+const outputs = [
+  ['base', 'model.glb'],
+  ['intake', 'model_0.glb'],
+  ['hood', 'model_1.glb'],
+  ['hopper', 'model_2.glb'],
+  ['wheel0', 'model_3.glb'],
+  ['wheel1', 'model_4.glb'],
+  ['wheel2', 'model_5.glb'],
+  ['wheel3', 'model_6.glb'],
+];
+for (const [category, file] of outputs) {
+  const keep = new Map();
+  for (const [node, c] of categories) {
+    if (c === category) keep.set(node, null);
+    else if (c instanceof Map && c.has(category)) keep.set(node, c.get(category));
+  }
   const part = extract(json, bin, keep);
   writeGlb(path.join(outDir, file), part.json, part.bin);
   console.log(`${file.padEnd(12)} ${String(keep.size).padStart(4)} parts  ${(part.bin.length / 1e6).toFixed(1)} MB`);
 }
+
+const config = {
+  name: '9410 2026 Robot',
+  isFTC: false,
+  ...ZEROED,
+  cameras: [],
+  components: outputs.slice(1).map(() => ({ zeroedRotations: ZEROED.rotations, zeroedPosition: ZEROED.position })),
+};
+fs.writeFileSync(path.join(outDir, 'config.json'), JSON.stringify(config, null, 2) + '\n');
+
+// Numbers MechanismSimConstants needs to steer/spin the wheel components.
+console.log('\nSwerve wheels (robot frame) — keep WHEEL_* in MechanismSimConstants in sync:');
+['FL', 'FR', 'BL', 'BR'].forEach((name, i) => {
+  const w = wheels[i];
+  // Rolling direction = axle × up; report it as the CAD steer angle.
+  const steerDeg = (Math.atan2(-w.axle[0], w.axle[1]) * 180) / Math.PI;
+  console.log(
+    `  ${name}: center (${w.center.map((v) => (v * IN).toFixed(4)).join(', ')}) m, ` +
+      `CAD steer ${steerDeg.toFixed(1)} deg, radius ${(w.radius * IN).toFixed(4)} m, ${w.wheelPrims.size} prims`,
+  );
+});

@@ -15,6 +15,7 @@ import com.pathplanner.lib.config.RobotConfig;
 import com.pathplanner.lib.controllers.PPHolonomicDriveController;
 import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
@@ -28,7 +29,9 @@ import edu.wpi.first.wpilibj2.command.Subsystem;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
 import frc.robot.constants.TunerConstants;
 import frc.robot.constants.TunerConstants.TunerSwerveDrivetrain;
+import frc.robot.sim.MechanismSimConstants;
 import frc.robot.sim.PhoenixSimUtil;
+import frc.robot.sim.RobotBumpSim;
 import org.ironmaple.simulation.SimulatedArena;
 import org.ironmaple.simulation.drivesims.COTS;
 import org.ironmaple.simulation.drivesims.SwerveDriveSimulation;
@@ -43,6 +46,10 @@ import org.ironmaple.simulation.drivesims.configs.SwerveModuleSimulationConfig;
 public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
   /** MapleSim drivetrain simulation. Non-null only when {@link Utils#isSimulation()}. */
   private SwerveDriveSimulation m_simDrivetrain = null;
+  /** Bump traversal sim (Z/pitch/roll + ramp sliding). Non-null only in simulation. */
+  private RobotBumpSim m_bumpSim = null;
+  /** Latest 3D sim pose from {@link #m_bumpSim}; flat until the first update. */
+  private Pose3d m_simPose3d = Pose3d.kZero;
 
   /* Blue alliance sees forward as 0 degrees (toward red alliance wall) */
   private static final Rotation2d kBlueAlliancePerspectiveRotation = Rotation2d.kZero;
@@ -87,7 +94,26 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
           .withRotationalDeadband(MAX_ANGULAR_RATE * 0.1)
           .withDriveRequestType(DriveRequestType.Velocity);
 
+  /**
+   * Like DRIVE_AT_ANGLE, for driver-controlled aiming while shooting (DriveMode.AIM). The joystick already has its
+   * own 10% deadband, and while shooting the stick is scaled down, so DRIVE_AT_ANGLE's 10%-of-max
+   * deadband would swallow most of the stick: the robot sat still and only turned (wheels in the
+   * turn-in-place "X"). This one only drops near-zero speeds.
+   */
+  public final SwerveRequest.FieldCentricFacingAngle AIM_AT_ANGLE =
+      new SwerveRequest.FieldCentricFacingAngle()
+          .withDeadband(AIM_TRANSLATION_DEADBAND_MPS)
+          .withRotationalDeadband(MAX_ANGULAR_RATE * 0.1)
+          .withHeadingPID(6.5, 0, 0.25)
+          .withDriveRequestType(DriveRequestType.Velocity);
+
+  /** Below this commanded speed (m/s) an aiming robot counts as stopped. */
+  public static final double AIM_TRANSLATION_DEADBAND_MPS = 0.02;
+
   private final SwerveRequest.SwerveDriveBrake BRAKE = new SwerveRequest.SwerveDriveBrake();
+  /** Stopped with every wheel pointed straight ahead (robot-relative). */
+  private final SwerveRequest.PointWheelsAt WHEELS_STRAIGHT =
+      new SwerveRequest.PointWheelsAt().withModuleDirection(Rotation2d.kZero);
 
   /** Swerve request to apply during robot-centric path following */
   private final SwerveRequest.ApplyRobotSpeeds m_pathApplyRobotSpeeds =
@@ -259,6 +285,13 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
                 .withVelocityY(y)
                 .withTargetDirection(Rotation2d.fromDegrees(rotation)));
         break;
+      case AIM:
+        applyRequest(
+            AIM_AT_ANGLE
+                .withVelocityX(x)
+                .withVelocityY(y)
+                .withTargetDirection(Rotation2d.fromDegrees(rotation)));
+        break;
       case DRIVE_TO_POINT:
         applyRequest(
             DRIVE_AT_ANGLE
@@ -269,6 +302,9 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
         break;
       case BRAKE:
         applyRequest(BRAKE);
+        break;
+      case WHEELS_STRAIGHT:
+        applyRequest(WHEELS_STRAIGHT);
         break;
     }
   }
@@ -357,9 +393,11 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
             .withSwerveModule(moduleConfig)
             .withGyro(COTS.ofPigeon2());
 
-    // Spawn near blue alliance station; auto routines will reset via resetPose().
-    m_simDrivetrain = new SwerveDriveSimulation(driveConfig, new Pose2d(2.0, 4.0, Rotation2d.kZero));
+    // Spawn on the blue side; Robot.simulationPeriodic moves it to the right alliance once the DS
+    // reports one, and auto routines reset via resetPose().
+    m_simDrivetrain = new SwerveDriveSimulation(driveConfig, MechanismSimConstants.BLUE_SPAWN_POSE);
     SimulatedArena.getInstance().addDriveTrainSimulation(m_simDrivetrain);
+    m_bumpSim = new RobotBumpSim(moduleTranslations);
 
     SwerveModuleSimulation[] simModules = m_simDrivetrain.getModules();
     for (int i = 0; i < 4; i++) {
@@ -380,6 +418,41 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     if (m_simDrivetrain == null) return;
     Rotation2d gyroReading = m_simDrivetrain.getGyroSimulation().getGyroReading();
     getPigeon2().getSimState().setRawYaw(gyroReading.getMeasure());
+  }
+
+  /**
+   * Steps the bump sim against MapleSim's latest pose and, while on a ramp, hands the
+   * frictionless-slide X back to MapleSim so the robot physically slides off a bump it can't
+   * crest. Call after {@code SimulatedArena.simulationPeriodic()} and before
+   * {@link #syncOdometryFromSim()}.
+   */
+  public void updateBumpSim() {
+    if (m_simDrivetrain == null) return;
+    Pose2d simPose = m_simDrivetrain.getSimulatedDriveTrainPose();
+    ChassisSpeeds fieldSpeeds = m_simDrivetrain.getDriveTrainSimulatedChassisSpeedsFieldRelative();
+    m_simPose3d =
+        m_bumpSim.update(simPose, fieldSpeeds, SimulatedArena.getSimulationSubTicksIn1Period());
+
+    if (m_bumpSim.isOnRamp()) {
+      m_simDrivetrain.setSimulationWorldPose(m_bumpSim.getSimWorldPose(simPose));
+      // setSimulationWorldPose zeroes linear velocity; restore it so MapleSim keeps the
+      // driver's lateral momentum and exits the ramp at the bump sim's X velocity.
+      m_simDrivetrain.setRobotSpeeds(
+          new ChassisSpeeds(
+              m_bumpSim.getSimXVelocity(),
+              fieldSpeeds.vyMetersPerSecond,
+              fieldSpeeds.omegaRadiansPerSecond));
+    }
+  }
+
+  /** Returns the simulated 3D robot pose (with bump Z/pitch/roll), or {@code null} on the real robot. */
+  public Pose3d getSimPose3d() {
+    return m_simDrivetrain == null ? null : m_simPose3d;
+  }
+
+  /** True while the bump sim owns the robot's X (climbing/sliding on a ramp). */
+  public boolean isSimOnBump() {
+    return m_bumpSim != null && m_bumpSim.isOnRamp();
   }
 
   /** Returns the MapleSim drivetrain simulation, or {@code null} on the real robot. */
@@ -405,11 +478,23 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     super.resetPose(m_simDrivetrain.getSimulatedDriveTrainPose());
   }
 
+  /**
+   * Resets only the pose estimate (e.g. to a vision pose). Same as {@link #resetPose} on the real
+   * robot; in sim it leaves MapleSim's robot where it is instead of teleporting it to the estimate.
+   */
+  public void resetEstimatedPose(Pose2d pose) {
+    super.resetPose(pose);
+  }
+
   @Override
   public void resetPose(Pose2d pose) {
     super.resetPose(pose);
     if (m_simDrivetrain != null) {
       m_simDrivetrain.setSimulationWorldPose(pose);
+      // Teleporting invalidates the ramp state; a stale X would snap the robot back.
+      m_bumpSim.reset();
+      // MapleSim's gyro only integrates turning, so point it at the new heading too.
+      m_simDrivetrain.getGyroSimulation().setRotation(pose.getRotation());
     }
   }
 
@@ -452,8 +537,11 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     FIELD_RELATIVE,
     SYS_ID,
     ROTATION_LOCK,
+    /** Driver aiming while shooting/passing: like ROTATION_LOCK with a near-zero deadband. */
+    AIM,
     DRIVE_TO_POINT,
-    BRAKE
+    BRAKE,
+    WHEELS_STRAIGHT
   }
 
   public void configureAutoBuilder() {

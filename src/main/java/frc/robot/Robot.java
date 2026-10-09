@@ -4,38 +4,39 @@
 
 package frc.robot;
 
-import static edu.wpi.first.units.Units.Meters;
-import static edu.wpi.first.units.Units.MetersPerSecond;
-import static edu.wpi.first.units.Units.Radians;
 
 import com.ctre.phoenix6.SignalLogger;
 
 // import edu.wpi.first.wpilibj.DataLogManager;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
-import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.math.geometry.Rotation3d;
-import edu.wpi.first.math.geometry.Translation2d;
-import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.networktables.NetworkTableInstance;
 import edu.wpi.first.networktables.StructArrayPublisher;
+import edu.wpi.first.networktables.StructPublisher;
+import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.RobotBase;
 import edu.wpi.first.wpilibj.RobotController;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
-import frc.robot.constants.ShotConstants;
+import frc.robot.sim.FuelBumpSim;
+import frc.robot.sim.FuelPathSim;
+import frc.robot.sim.HopperSim;
 import frc.robot.sim.IntakeSim;
+import frc.robot.sim.MechanismSimConstants;
 import frc.robot.sim.MechanismSimManager;
+import frc.robot.sim.SimShot;
+import frc.robot.sim.VisionSim;
 import frc.robot.subsystems.StateMachine;
 import frc.robot.subsystems.StateMachine.RobotState;
+import frc.robot.utils.JoystickPublisher;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Optional;
 import org.ironmaple.simulation.SimulatedArena;
 import org.ironmaple.simulation.seasonspecific.rebuilt2026.Arena2026Rebuilt;
-import org.ironmaple.simulation.seasonspecific.rebuilt2026.RebuiltFuelOnFly;
 
 
 
@@ -44,17 +45,26 @@ public class Robot extends TimedRobot {
 
   private final RobotContainer m_robotContainer;
 
-  /** Sim-only intake zone. Tracks held fuel and gates shot spawning. */
+  /** Sends controller inputs to NT so AdvantageScope's Joysticks tab can show them live. */
+  private final JoystickPublisher joystickPublisher = new JoystickPublisher();
+
+  /** Sim-only intake: picks fuel up off the field and hands it to fuelPathSim. */
   private IntakeSim intakeSim = null;
+
+  /** Sim-only fuel inside the robot: hopper → spindexer → feeder → flywheel. */
+  private FuelPathSim fuelPathSim = null;
 
   /** Sim-only physics for the flywheel, feeder, spindexer, intake roller, intake wrist, and hood. */
   private MechanismSimManager mechanismSim = null;
 
-  /** Ticks until the next shot is allowed to spawn (~0.5 s @ 50 Hz). */
-  private int simShotCooldown = 0;
-  /** Consecutive ticks that readyToFire has been true; must reach SETTLE_TICKS before firing. */
-  private int simReadySettleTicks = 0;
-  private static final int SETTLE_TICKS = 50; // 1 second @ 50 Hz
+  /** Sim-only hopper extension: slides out on first enable and becomes part of the robot's collision. */
+  private HopperSim hopperSim = null;
+
+  /** Sim-only Limelights: publish what each camera would see so the real vision code runs. */
+  private VisionSim visionSim = null;
+
+  /** Alliance whose spawn the sim robot was last placed at (null until the DS reports one). */
+  private Alliance spawnedAlliance = null;
 
   /** Fuel piece poses for live AdvantageScope field rendering (NT struct arrays). */
   private final StructArrayPublisher<Pose3d> simFuelPoses3dPublisher =
@@ -65,6 +75,11 @@ public class Robot extends TimedRobot {
       NetworkTableInstance.getDefault()
           .getStructArrayTopic("MapleSim/Fuel2d", Pose2d.struct)
           .publish();
+  /** Ground-truth 3D robot pose including bump height/tilt, for the AdvantageScope 3D field. */
+  private final StructPublisher<Pose3d> simRobotPose3dPublisher =
+      NetworkTableInstance.getDefault()
+          .getStructTopic("MapleSim/RobotPose3d", Pose3d.struct)
+          .publish();
 
   public Robot() {
     SignalLogger.setPath("/U/ctre-logs/");
@@ -72,7 +87,12 @@ public class Robot extends TimedRobot {
       // Override the arena before RobotContainer (which constructs Swerve and registers
       // the drivetrain with the arena). false = no ramp colliders so the robot can drive
       // over the field bumps instead of being stopped by them.
-      SimulatedArena.overrideInstance(new Arena2026Rebuilt(false));
+      Arena2026Rebuilt arena = new Arena2026Rebuilt(false);
+      // Efficiency mode (MapleSim's default) cuts the neutral zone to a third of its fuel and
+      // drops the other alliance's depot. Turn it off for a full match load: 360 neutral + both
+      // depots.
+      arena.setEfficiencyMode(false);
+      SimulatedArena.overrideInstance(arena);
     }
     m_robotContainer = new RobotContainer();
   }
@@ -96,6 +116,7 @@ public class Robot extends TimedRobot {
     SignalLogger.writeDouble("CAN Error Count", RobotController.getCANStatus().receiveErrorCount, "#");
     m_robotContainer.setAuto();
     CommandScheduler.getInstance().run();
+    joystickPublisher.update();
   }
 
   @Override
@@ -146,17 +167,37 @@ public class Robot extends TimedRobot {
     SimulatedArena.getInstance().resetFieldForAuto();
 
     var sm = m_robotContainer.getStateMachine();
-    mechanismSim = new MechanismSimManager(sm);
+    hopperSim = new HopperSim(sm.drivetrain.getDriveSimulation());
+    mechanismSim = new MechanismSimManager(sm, hopperSim);
+    visionSim = new VisionSim();
     // Only collect fuel once the intake arm has physically swung down, not the instant the
     // state changes to INTAKING.
+    fuelPathSim = new FuelPathSim();
     intakeSim = new IntakeSim(
         sm.drivetrain.getDriveSimulation(),
-        () -> sm.getCurrentState() == RobotState.INTAKING && mechanismSim.isIntakeDeployed());
+        fuelPathSim,
+        () -> sm.getCurrentState() == RobotState.INTAKING
+            && mechanismSim.isIntakeDeployed()
+            && Math.abs(mechanismSim.getIntakeRollerVelocityRps())
+                > MechanismSimConstants.INTAKE_ROLLER_INTAKING_RPS);
   }
 
   @Override
   public void simulationPeriodic() {
     StateMachine sm = m_robotContainer.getStateMachine();
+
+    // Start on our own alliance's side: whenever the alliance changes while disabled (including
+    // the first time the DS reports one), move the robot to that alliance's spawn. Never while
+    // enabled, so it can't teleport mid-match.
+    Optional<Alliance> alliance = DriverStation.getAlliance();
+    if (DriverStation.isDisabled() && alliance.isPresent() && alliance.get() != spawnedAlliance) {
+      sm.drivetrain.resetPose(MechanismSimConstants.spawnPose(alliance.get()));
+      spawnedAlliance = alliance.get();
+    }
+
+    // Slides the hopper out on first enable and adds/removes its collision box before the arena
+    // steps.
+    if (hopperSim != null) hopperSim.update();
 
     // Step mechanism physics first so the intake-deployed check below sees this loop's arm angle.
     if (mechanismSim != null) mechanismSim.update();
@@ -165,19 +206,33 @@ public class Robot extends TimedRobot {
     // the correct extended/retracted state for this frame.
     if (intakeSim != null) intakeSim.update();
 
+    // Fuel rolls up and back down the bumps instead of passing through them at floor height.
+    FuelBumpSim.update();
+
     // Advance MapleSim physics. Inside this call, each module's SimulatedMotorController
     // pushes encoder positions into the TalonFX/CANcoder sim states so CTRE's odometry
     // sees fresh sensor values.
     SimulatedArena.getInstance().simulationPeriodic();
 
+    // Bump physics: Z/pitch/roll over the field bumps, and slide back off ones the robot
+    // is too slow to crest. Must run before the odometry sync so CTRE sees the corrected X.
+    sm.drivetrain.updateBumpSim();
+    simRobotPose3dPublisher.set(sm.drivetrain.getSimPose3d());
+    SmartDashboard.putBoolean("simOnBump", sm.drivetrain.isSimOnBump());
+
     // Push MapleSim's gyro reading into the Pigeon2 sim state.
     sm.drivetrain.updateSimState();
 
-    // Sync CTRE odometry to MapleSim's ground-truth pose so AdvantageScope shows
-    // the robot at the same position where MapleSim runs collision/intake physics.
-    sm.drivetrain.syncOdometryFromSim();
+    // Limelights see the true pose (with bump tilt); the vision code reads it next loop, like the
+    // real cameras' latency.
+    if (visionSim != null) visionSim.update(sm.drivetrain.getSimPose3d());
 
-    maybeSpawnShot(sm);
+    // With vision fusion off, sync CTRE odometry to MapleSim's ground-truth pose so AdvantageScope
+    // shows the robot at the same position where MapleSim runs collision/intake physics. With it
+    // on, odometry runs from the simulated wheels and gyro and vision corrects it.
+    if (!VisionSim.isFusionEnabled()) sm.drivetrain.syncOdometryFromSim();
+
+    runFuelPath(sm);
     publishSimGamePieces(sm);
   }
 
@@ -185,11 +240,15 @@ public class Robot extends TimedRobot {
   private void publishSimGamePieces(StateMachine sm) {
     Pose3d[] arenaFuel = SimulatedArena.getInstance().getGamePiecesArrayByType("Fuel");
     ArrayList<Pose3d> allFuelPoses = new ArrayList<>(arenaFuel.length + 1);
-    Collections.addAll(allFuelPoses, arenaFuel);
-
-    if (intakeSim != null && intakeSim.getHeldCount() > 0) {
-      allFuelPoses.add(getHeldFuelPose(sm));
+    for (Pose3d fuel : arenaFuel) {
+      // Balls on the floor (not in flight) ride on top of the bumps.
+      boolean grounded = fuel.getZ() < MechanismSimConstants.FUEL_RADIUS_M + 0.05;
+      allFuelPoses.add(grounded ? FuelBumpSim.onSurface(fuel) : fuel);
     }
+
+    // Fuel inside the robot: flying in from the rollers, piled in the hopper, riding the
+    // spindexer, and climbing the feeder.
+    if (fuelPathSim != null) allFuelPoses.addAll(fuelPathSim.getPoses(sm.drivetrain.getSimPose3d()));
 
     Pose3d[] fuel3d = allFuelPoses.toArray(Pose3d[]::new);
     simFuelPoses3dPublisher.set(fuel3d);
@@ -200,103 +259,37 @@ public class Robot extends TimedRobot {
     }
     simFuelPoses2dPublisher.set(fuel2d);
 
-    SmartDashboard.putNumber("simHeldFuelCount", intakeSim != null ? intakeSim.getHeldCount() : 0);
+    SmartDashboard.putNumber("simHeldFuelCount", fuelPathSim != null ? fuelPathSim.getCount() : 0);
     SmartDashboard.putNumber("simFuelVisibleCount", fuel3d.length);
   }
 
-  /** Approximate in-robot location for a held fuel piece, published for visualization. */
-  private Pose3d getHeldFuelPose(StateMachine sm) {
-    Pose2d robotPose = sm.drivetrain.getState().Pose;
-    Translation2d heldOffsetRobot = new Translation2d(0.28, 0.0);
-    Translation2d heldField = robotPose.getTranslation().plus(heldOffsetRobot.rotateBy(robotPose.getRotation()));
-    return new Pose3d(
-        new Translation3d(heldField.getX(), heldField.getY(), 0.35),
-        new Rotation3d(0, 0, robotPose.getRotation().getRadians()));
-  }
-
   /**
-   * Spawns a {@link RebuiltFuelOnFly} projectile when the state machine is firing and the
-   * intake holds a fuel ball. Cooldown rate-limits to one shot per ~0.5 s.
+   * Moves fuel through the spindexer and feeder at their simulated speeds, and launches a shot for
+   * every ball that reaches the flywheel. The real robot only runs the feeder and spindexer when
+   * it's ready to fire, so that gates the shots; the fire rate comes from the mechanisms.
+   *
+   * <p>Each ball launches from where the simulated flywheel and hood actually ARE (not their
+   * setpoints), so shots taken while they're still moving miss like they would for real. See the
+   * "Shots" section of {@link MechanismSimConstants} for how the launch model was calibrated.
    */
-  private void maybeSpawnShot(StateMachine sm) {
-    boolean isShooting = sm.getCurrentState() == RobotState.SHOOTING;
-    boolean isPassing = sm.getCurrentState() == RobotState.PASSING;
-    if (!isShooting && !isPassing) {
-      simShotCooldown = 0;
-      simReadySettleTicks = 0;
-      return;
-    }
-    // Mirror the real robot's gate: only fire when heading and speed are both OK.
-    if (!sm.isReadyToFire()) {
-      simReadySettleTicks = 0;
-      return;
-    }
-    // Require the robot to stay on-target for SETTLE_TICKS before spawning the shot.
-    if (simReadySettleTicks < SETTLE_TICKS) {
-      simReadySettleTicks++;
-      return;
-    }
-    if (simShotCooldown > 0) {
-      simShotCooldown--;
-      return;
-    }
-    if (intakeSim == null || intakeSim.getHeldCount() == 0) return;
+  private void runFuelPath(StateMachine sm) {
+    int shots =
+        fuelPathSim.update(
+            mechanismSim.getSpindexerVelocityRps(), mechanismSim.getFeederVelocityRps());
+    if (shots == 0) return;
 
     Pose2d pose = sm.drivetrain.getState().Pose;
-    ChassisSpeeds robotRelativeSpeeds = sm.drivetrain.getState().Speeds;
     ChassisSpeeds fieldRelativeSpeeds =
-        ChassisSpeeds.fromRobotRelativeSpeeds(robotRelativeSpeeds, pose.getRotation());
-    double headingRad;
-    double rps;
-    double tof;
-
-    if (isPassing) {
-      // Passing uses a fixed aim angle; SOTM result may not be valid.
-      headingRad = Math.toRadians(sm.getPassAimAngleDeg()) + Math.PI;
-      double dist =
-          pose.getTranslation()
-              .minus(
-                  sm.isBlueAlliance() ? Constants.Field.HOPPER_BLUE : Constants.Field.HOPPER_RED)
-              .getNorm();
-      rps = ShotConstants.SHOOTER_VELOCITY_INTERPOLATOR.getInterpolatedValue(dist);
-      tof = 0.75;
-    } else {
-      var result = sm.getLastSOTMResult();
-      if (!result.isValid()) return;
-      // Launch at the speed the simulated flywheel is ACTUALLY spinning, not the setpoint, so
-      // shots fired during spin-up fall short like they would on the real robot.
-      rps = mechanismSim != null ? mechanismSim.getFlywheelVelocityRps() : result.shooterRps();
-      tof = result.timeOfFlightSec() > 0 ? result.timeOfFlightSec() : 0.75;
-      // Rear of robot = pose.getRotation() + PI (physically where the shooter points).
-      headingRad = pose.getRotation().getRadians() + Math.PI;
+        ChassisSpeeds.fromRobotRelativeSpeeds(sm.drivetrain.getState().Speeds, pose.getRotation());
+    for (int i = 0; i < shots; i++) {
+      SimulatedArena.getInstance()
+          .addGamePieceProjectile(
+              SimShot.launch(
+                  pose,
+                  fieldRelativeSpeeds,
+                  mechanismSim.getFlywheelVelocityRps(),
+                  mechanismSim.getHoodPositionRotations()));
     }
-
-    // Decompose total launch speed into horizontal + vertical from time-of-flight arc.
-    // RPS_TO_SPEED is calibrated against the real shooter LUT — tune alongside it.
-    final double RPS_TO_SPEED = 0.175;
-    double totalSpeed = rps * RPS_TO_SPEED;
-    double vertSpeed = (9.81 * tof) / 2.0;
-    double horzSpeed = Math.sqrt(Math.max(0, totalSpeed * totalSpeed - vertSpeed * vertSpeed));
-    double pitchRad = Math.atan2(vertSpeed, horzSpeed);
-
-    intakeSim.consume();
-
-    // RebuiltFuelOnFly rotates shooterPositionOnRobot by shooterFacing internally, not by
-    // chassisFacing. For a rear shooter (shooterFacing = pose.rotation + π), passing
-    // (+0.20, 0) lands the spawn 0.20 m behind the chassis center.
-    SimulatedArena.getInstance()
-        .addGamePieceProjectile(
-            new RebuiltFuelOnFly(
-                pose.getTranslation(),
-                new Translation2d(0.20, 0),
-                fieldRelativeSpeeds,
-                Rotation2d.fromRadians(headingRad),
-                Meters.of(0.80),
-                MetersPerSecond.of(totalSpeed),
-                Radians.of(pitchRad)));
-
-    simShotCooldown = 25;
-    simReadySettleTicks = 0;
   }
 
   @Override
