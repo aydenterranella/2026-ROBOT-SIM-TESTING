@@ -478,14 +478,6 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     super.resetPose(m_simDrivetrain.getSimulatedDriveTrainPose());
   }
 
-  /**
-   * Resets only the pose estimate (e.g. to a vision pose). Same as {@link #resetPose} on the real
-   * robot; in sim it leaves MapleSim's robot where it is instead of teleporting it to the estimate.
-   */
-  public void resetEstimatedPose(Pose2d pose) {
-    super.resetPose(pose);
-  }
-
   @Override
   public void resetPose(Pose2d pose) {
     super.resetPose(pose);

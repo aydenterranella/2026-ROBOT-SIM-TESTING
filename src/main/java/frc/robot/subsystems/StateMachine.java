@@ -25,7 +25,6 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.firecontrol.ShotCalculator;
 import frc.lib.team9410.PowerRobotContainer;
-import frc.robot.sim.VisionSim;
 import frc.lib.team9410.subsystems.PositionSubsystem;
 import frc.lib.team9410.subsystems.VelocitySubsystem;
 import frc.lib.team9410.subsystems.VelocityTorqueSubsystem;
@@ -151,9 +150,9 @@ public class StateMachine extends SubsystemBase {
   // }
 
   public void setRobotPose () {
-    // In simulation, VisionSim fakes the three Limelights so this runs like the real robot. With
-    // its FuseIntoOdometry toggle off, odometry is synced to MapleSim's true pose instead.
-    if (RobotBase.isSimulation() && !VisionSim.isFusionEnabled()) {
+    // In simulation, MapleSim/CTRE provide odometry truth. Vision fusion can introduce
+    // jitter when no simulated Limelight pipeline is configured.
+    if (RobotBase.isSimulation()) {
       SmartDashboard.putNumber("currentPoseX", drivetrain.getState().Pose.getX());
       SmartDashboard.putNumber("currentPoseY", drivetrain.getState().Pose.getY());
       SmartDashboard.putNumber("currentPoseYaw", drivetrain.getState().Pose.getRotation().getDegrees());
@@ -187,7 +186,7 @@ public class StateMachine extends SubsystemBase {
           // System.out.println(matchStarted);
           if (!gyroReset || !matchStarted) {
             // newPose = new Pose2d(newPose.getX(), newPose.getY(), drivetrain.getState().Pose.getRotation());
-            drivetrain.resetEstimatedPose(newPose);
+            drivetrain.resetPose(newPose);
             gyroReset = true;
           }
           // else {

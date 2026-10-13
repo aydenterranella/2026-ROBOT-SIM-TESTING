@@ -29,7 +29,6 @@ import frc.robot.sim.IntakeSim;
 import frc.robot.sim.MechanismSimConstants;
 import frc.robot.sim.MechanismSimManager;
 import frc.robot.sim.SimShot;
-import frc.robot.sim.VisionSim;
 import frc.robot.subsystems.StateMachine;
 import frc.robot.subsystems.StateMachine.RobotState;
 import frc.robot.utils.JoystickPublisher;
@@ -59,9 +58,6 @@ public class Robot extends TimedRobot {
 
   /** Sim-only hopper extension: slides out on first enable and becomes part of the robot's collision. */
   private HopperSim hopperSim = null;
-
-  /** Sim-only Limelights: publish what each camera would see so the real vision code runs. */
-  private VisionSim visionSim = null;
 
   /** Alliance whose spawn the sim robot was last placed at (null until the DS reports one). */
   private Alliance spawnedAlliance = null;
@@ -169,7 +165,6 @@ public class Robot extends TimedRobot {
     var sm = m_robotContainer.getStateMachine();
     hopperSim = new HopperSim(sm.drivetrain.getDriveSimulation());
     mechanismSim = new MechanismSimManager(sm, hopperSim);
-    visionSim = new VisionSim();
     // Only collect fuel once the intake arm has physically swung down, not the instant the
     // state changes to INTAKING.
     fuelPathSim = new FuelPathSim();
@@ -223,14 +218,9 @@ public class Robot extends TimedRobot {
     // Push MapleSim's gyro reading into the Pigeon2 sim state.
     sm.drivetrain.updateSimState();
 
-    // Limelights see the true pose (with bump tilt); the vision code reads it next loop, like the
-    // real cameras' latency.
-    if (visionSim != null) visionSim.update(sm.drivetrain.getSimPose3d());
-
-    // With vision fusion off, sync CTRE odometry to MapleSim's ground-truth pose so AdvantageScope
-    // shows the robot at the same position where MapleSim runs collision/intake physics. With it
-    // on, odometry runs from the simulated wheels and gyro and vision corrects it.
-    if (!VisionSim.isFusionEnabled()) sm.drivetrain.syncOdometryFromSim();
+    // Sync CTRE odometry to MapleSim's ground-truth pose so AdvantageScope shows
+    // the robot at the same position where MapleSim runs collision/intake physics.
+    sm.drivetrain.syncOdometryFromSim();
 
     runFuelPath(sm);
     publishSimGamePieces(sm);
