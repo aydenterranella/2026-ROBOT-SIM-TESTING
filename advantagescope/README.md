@@ -60,8 +60,5 @@ The script also fixes some export problems:
    bump height and tilt; `Robot/Pose` also works but stays flat) and choose "9410 2026 Robot"
    as the model.
 3. Drag `Sim/Mechanisms/ComponentPoses` onto the robot entry as **Component** poses.
-4. Optional: add a **Joysticks** tab and pick a layout (e.g. Xbox) for Joystick 0 to see the
-   driver controller live. The robot publishes it under `/AdvantageKit/DriverStation/Joystick0`,
-   which is where AdvantageScope looks (see `frc.robot.utils.JoystickPublisher`).
-5. Drag `MapleSim/Fuel3d` in as **Game Piece** to see the fuel. Fuel the robot is holding is
+4. Drag `MapleSim/Fuel3d` in as **Game Piece** to see the fuel. Fuel the robot is holding is
    drawn inside the hopper, one ball per piece, so you can see how full it is.

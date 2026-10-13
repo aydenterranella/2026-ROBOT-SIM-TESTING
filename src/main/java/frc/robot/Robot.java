@@ -31,7 +31,6 @@ import frc.robot.sim.MechanismSimManager;
 import frc.robot.sim.SimShot;
 import frc.robot.subsystems.StateMachine;
 import frc.robot.subsystems.StateMachine.RobotState;
-import frc.robot.utils.JoystickPublisher;
 import java.util.ArrayList;
 import java.util.Optional;
 import org.ironmaple.simulation.SimulatedArena;
@@ -43,9 +42,6 @@ public class Robot extends TimedRobot {
   private Command m_autonomousCommand;
 
   private final RobotContainer m_robotContainer;
-
-  /** Sends controller inputs to NT so AdvantageScope's Joysticks tab can show them live. */
-  private final JoystickPublisher joystickPublisher = new JoystickPublisher();
 
   /** Sim-only intake: picks fuel up off the field and hands it to fuelPathSim. */
   private IntakeSim intakeSim = null;
@@ -112,7 +108,6 @@ public class Robot extends TimedRobot {
     SignalLogger.writeDouble("CAN Error Count", RobotController.getCANStatus().receiveErrorCount, "#");
     m_robotContainer.setAuto();
     CommandScheduler.getInstance().run();
-    joystickPublisher.update();
   }
 
   @Override

@@ -103,13 +103,6 @@ class RobotSimSmokeTest {
     pad.setRightTriggerAxis(1.0);
     pad.notifyNewData();
     run(robot, 2.5);
-    // Controller shows up where AdvantageScope's Joysticks tab looks (right trigger = Xbox axis 3).
-    double[] axes =
-        NetworkTableInstance.getDefault()
-            .getDoubleArrayTopic("/AdvantageKit/DriverStation/Joystick0/AxisValues")
-            .subscribe(new double[0])
-            .get();
-    assertTrue(axes.length > 3 && axes[3] == 1.0, "right trigger should be published for AdvantageScope");
     assertTrue(fuel.getCount() <= 2,
         "should fire while stationary, " + fuel.getCount() + " of 10 left");
     assertEquals(0.0,
