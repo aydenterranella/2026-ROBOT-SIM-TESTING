@@ -57,7 +57,7 @@ public class FuelPathSim {
   private static final double R = FUEL_RADIUS_M;
   private static final double GRAVITY = 9.81;
   private static final int SUBSTEPS = 4;
-  private static final int SOLVER_ITERATIONS = 6;
+  private static final int SOLVER_ITERATIONS = 3;
   private static final double FEEDER_SPACING_M = 2 * R + 0.005;
   private static final double FEEDER_PATH_LENGTH_M = pathLength();
 
@@ -215,15 +215,6 @@ public class FuelPathSim {
       b.vx = (b.x - b.px) / h * HOPPER_DAMPING;
       b.vy = (b.y - b.py) / h * HOPPER_DAMPING;
       b.vz = (b.z - b.pz) / h * HOPPER_DAMPING;
-      // Overlap pushes count as velocity too; cap them so a squeezed pile can't launch balls.
-      double speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz);
-      if (speed > HOPPER_MAX_SPEED_MPS) {
-        double scale = HOPPER_MAX_SPEED_MPS / speed;
-        b.vx *= scale;
-        b.vy *= scale;
-        b.vz *= scale;
-      }
-      b.vz = Math.min(b.vz, HOPPER_MAX_RISE_MPS);
     }
   }
 

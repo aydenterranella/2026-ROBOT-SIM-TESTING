@@ -15,13 +15,7 @@
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
  */
 
 package frc.firecontrol;
@@ -51,7 +45,7 @@ import edu.wpi.first.math.interpolation.InverseInterpolator;
 public class ShotLUT {
 
   private final InterpolatingTreeMap<Double, ShotParameters> map;
-  private final java.util.NavigableSet<Double> distances = new java.util.TreeSet<>();
+  private int entryCount = 0;
 
   public ShotLUT() {
     map =
@@ -61,13 +55,8 @@ public class ShotLUT {
 
   /** Insert or overwrite the parameters at a given distance. */
   public void put(double distanceM, ShotParameters params) {
-    if (!Double.isFinite(distanceM) || distanceM <= 0 || params == null
-        || !Double.isFinite(params.rps()) || params.rps() <= 0
-        || !Double.isFinite(params.angleDeg()) || !Double.isFinite(params.tofSec()) || params.tofSec() <= 0) {
-      throw new IllegalArgumentException("Shot entries require positive finite distance, RPS and flight time");
-    }
     map.put(distanceM, params);
-    distances.add(distanceM);
+    entryCount++;
   }
 
   /** Convenience: insert from individual fields. */
@@ -103,16 +92,11 @@ public class ShotLUT {
 
   public void clear() {
     map.clear();
-    distances.clear();
+    entryCount = 0;
   }
 
-  public boolean containsDistance(double distanceM) {
-    return Double.isFinite(distanceM) && !distances.isEmpty()
-        && distanceM >= distances.first() - 1e-9 && distanceM <= distances.last() + 1e-9;
-  }
-
-  /** Number of distinct calibration distances. */
+  /** Approximate number of entries added (may overcount if same key is put twice). */
   public int size() {
-    return distances.size();
+    return entryCount;
   }
 }

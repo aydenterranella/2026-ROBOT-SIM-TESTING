@@ -1,449 +1,486 @@
-# SOTM-POWERSIM
+# 2026 Robot — Sim + SOTM
 
-A copy of `2026-Robot-Powerlib-Rewrite` with the MapleSim simulation from
-`2026-ROBOT-SOTM-REWRITE` underneath it. The robot code is `sotm-testing` at `365905bb`
-(2026-10-16) merged with Chad's `codex/improved-auto-path-building` at `99f52e26`
-(2026-10-15, continuous auto paths, bump-crossing command, single-tag heading sync). That
-merge exists only here; no branch upstream has it yet. Not a git repo. The sim answers one
-question: **how close does the sim feel to the real robot?**
+This repo is where we develop the **MapleSim simulation** of the 2026 robot and the
+**shoot-on-the-move (SOTM)** fire control. The robot code is the same as the real robot's. The
+sim runs underneath it, and AdvantageScope shows a 3D model of the robot with its intake, hood,
+hopper, and wheels moving.
 
-**The merge:** two conflicts, both resolved without changing behavior on either side.
-- **`RobotAutos.java`:** keeps Chad's settled final-aim drive in place of the old
-  turn-until-aligned step, and keeps `sotm-testing`'s `aimAtHub` (shot-solution heading,
-  parking). `aligned()` is gone because nothing calls it.
-- **`StateMachineTest.java`:** both branches added a "wait for the sim drivetrain to stop"
-  step between tests; this keeps `sotm-testing`'s `settleDrivetrain()`.
+This README covers how to set up and run the sim, how SOTM works, and how the sim works inside.
+It assumes you already know the rest of the robot code.
 
-The merged robot code passed its own 107 tests on 4 runs out of 4 before the sim went
-underneath. See "Autonomous in sim" below for what the sim found.
+---
 
-**Pulling new robot commits:** apart from the sim changes listed below, every file is
-byte-identical to that merge, except the constants files Power Tool regenerated on
-2026-10-16 (about 60 constants marked `@TunableConstant volatile`, same values). To catch up,
-apply `git diff <old commit>..<new commit> -- . ':!README.md'` from the rewrite repo here
-with `git apply`, and merge its README changes into the "Shoot on the move" section and
-below (that part is upstream's README verbatim). Rebuild Power Tool
-(`cd power-tool; npm run build`) if `power-tool/` changed, and update the commits above.
+## Contents
 
-## Simulation
+1. [Set up AdvantageScope](#1-set-up-advantagescope)
+2. [Run the sim](#2-run-the-sim)
+3. [Shoot on the move](#3-shoot-on-the-move)
+4. [How the sim works](#4-how-the-sim-works)
+5. [Tests](#5-tests)
+6. [Updating the 3D model after a CAD change](#6-updating-the-3d-model-after-a-cad-change)
+7. [Troubleshooting](#7-troubleshooting)
+8. [Credits](#8-credits)
 
-### Run it
+---
 
-```powershell
-./gradlew.bat simulateJava
-```
+## 1. Set up AdvantageScope
 
-`gradle.properties` pins Gradle to the WPILib JDK (`C:\Users\Public\wpilib\2026\jdk`); the
-system Java 26 fails with `Type T not present`. In the Sim GUI, drag your controller onto
-Joystick 0, pick an alliance, then Teleoperated. Same buttons as the robot: left trigger
-collects, right trigger shoots, B ejects.
+The sim runs fine without AdvantageScope, but AdvantageScope is how you actually *see* it. It
+shows a 3D model of the robot built from our Onshape CAD, with the intake arm, hood, hopper
+extension, and all four swerve wheels driven by the sim.
 
-**Power Tool:** `cd power-tool; npm start`. It defaults to **Local simulation**
-(`localhost:5810`, File → Connection Settings → Target) and reads this folder's constants.
-Do **not** use File → Update PowerLib Library Files here: it overwrites the
-`PowerSubsystem` sim switch described below. Writing tuned values or tunable flags back to
-code runs `gradlew --no-daemon build` afterwards, which includes the sim tests (about 1.5 min).
-Let it finish, then restart `simulateJava` so the sim runs the new code. Live tuning (changing
-a `@TunableConstant` in Power Tool while the sim runs) needs no rebuild.
+### Step 1 — Install the robot model (one time)
 
-**AdvantageScope:** the `9410 2026 Robot` model is already in
-`%APPDATA%\AdvantageScope\userAssets\Robot_9410_2026` (a copy is in `advantagescope/`).
-File → Connect to Simulator, add a 3D Field, drag `MapleSim/RobotPose3d` in as the robot,
-`Sim/Mechanisms/ComponentPoses` onto it as components, and `MapleSim/Fuel3d` as game pieces.
-Restart AdvantageScope after the model files change.
-The full guide is section 1 of the `2026-ROBOT-SOTM-REWRITE` README.
+The 2026 CAD files for this sim are in the **new Powerhouse Google Drive:
+02 | Seasons → 2026-2027 → 04 | Programming**. Download the **`Robot_9410_2026`** folder from
+there. The model files are too big for git (the chassis alone is about 85 MB), so the repo only
+has `config.json`.
 
-### What changed from the robot code
+Copy the whole `Robot_9410_2026` folder into AdvantageScope's **user assets** folder:
 
-| File | Change |
-|---|---|
-| `src/main/java/frc/robot/sim/*` | The SOTM rewrite's sim package: flywheel/feeder/spindexer/intake-roller physics (`DCMotorSim`, inertia from SysId kA), intake wrist and hood arms (`SingleJointedArmSim` with gravity and hard stops), hopper extension, fuel path through the robot, intake pickup, shot launch, bumps. Ported to PowerLib constants; numbers unchanged. One change from the vendored bump sim (`RobotBumpSim`): its ramp was frictionless, so a driven robot could only coast over and anything under ~1.8 m/s slid back. Now the wheels keep pushing on the ramp (MapleSim's wheel-force speed change is added to gravity), so the robot drives over the bump the way Chad's bump-crossing command expects. Coasting still behaves as before. Two later fixes: hopper balls are capped at 2.5 m/s (0.8 m/s upward), because the solver turned overlap pushes into 10-30 m/s and launched balls metres up while shooting (the feed rate is unchanged); and roller friction can stop a roller but not reverse it, because a stopped intake roller used to flip between ±0.9 rps every loop, which made its Power Tool tile change sign. |
-| `frc/powerlib/subsystems/PowerSubsystem.java` (+ the four subsystem types) | New `PowerSubsystem.usePhysicsSimulation(true)`. By default PowerLib builds no TalonFX in sim and uses a kinematic `*IOSim`, so PID, Motion Magic and flywheel spin-up never really happen. With the switch on, sim builds the real devices and the real IO path, and the physics models drive the TalonFX/CANcoder sim states. Off by default, so the existing tests are unchanged. |
-| `Robot.java` | Flips that switch, swaps in the 2026 arena (bump colliders off, full fuel load) before `RobotContainer`, and runs the SOTM sim loop in `simulationInit()` / `simulationPeriodic()`. Intake pickup is gated on the arm being down and the rollers spinning inward (this code can collect while spinning up or shooting, not only in `INTAKING`). If no alliance has been reported at launch, it sets Blue 1: the Sim GUI starts "Disconnected" with no alliance, so the alliance-filtered auto chooser offered only "None" until the robot had been enabled once. The GUI copies the station into its Alliance Station box, so switch to Red there. |
-| `Swerve.java` | MapleSim drivetrain (55 kg, 30"×28" bumpers, X60s (FOC model on drive), 5.4:1 / 12.1:1, 0.01 kg·m² steer inertia, Colsons, 0.1 /s body drag) replaces CTRE's 5 ms sim notifier. MapleSim drives the wheels from the voltages Phoenix commands, using the robot's real steer and drive gains; `PhoenixSimUtil.regulateForSimulation` only zeroes encoder offsets, inversions and the steer-drive coupling ratio. Odometry is synced to MapleSim's ground truth each loop. |
-| `build.gradle` | `forkEvery = 1` for tests (HAL, arena and the sim switch are global). The auto route tests are left out of `test` and run with `./gradlew autoSim`. |
-| `src/test/java/frc/robot/sim/*` | Sim tests from the SOTM rewrite, ported. `RobotSimSmokeTest` builds the real `Robot` and checks spawn, hopper, intake, and that holding shoot spins up, aims, fires and scores while stationary. `SimShotTest` fires every shot-table row. `SwerveSteerSimTest` steps the wheels 85° and to X-lock on the real steer values and checks they settle and hold without buzzing. `StationaryAimXLockSimTest` (SOTM off) and `StationaryAimParallelSimTest` (SOTM on) hold shoot from 4.2 m and check the aim target holds still while turning, the wheels park once, and they stay parked without sliding while it fires. `Auto*SimTest` (one per route, `./gradlew autoSim`) runs each auto end to end; see "Autonomous in sim". Every test robot is built through `SimTestRobots`, which keeps NetworkTables local so a test run never takes ports 5810/1735 away from a sim you have open. |
+- In AdvantageScope: **Help → Show Assets Folder**, **or**
+- On Windows: `%APPDATA%\AdvantageScope\userAssets`
 
-### Where the sim is not the robot
+Then **restart AdvantageScope**. The model shows up in the model list as **"9410 2026 Robot"**.
 
-Compare these on the robot before trusting the sim for them:
-
-- **Steering.** The sim runs the robot's own steer values (kP 50, 12.1:1, fused CANcoder,
-  60 A limit). It only zeroes encoder offsets and inversions, because MapleSim starts every
-  wheel at zero and the robot's offsets would make the wheels vibrate in place, and the
-  coupling ratio (4.5), because MapleSim's steering doesn't turn the drive wheel the way the
-  module gears do. With the ratio left in, Phoenix read every steer move as wheel speed, so the
-  stationary X-lock kept letting go and re-locking and the wheels whirled while aiming. Two
-  gaps remain:
-  - Phoenix's simulated motor controllers run on the wall clock, so they see each MapleSim step
-    once per 20 ms loop and react a loop or two late. Big steer moves overshoot more than on
-    the robot: an 85° step overshoots ~32° and settles in ~0.3 s, where a model of the robot's
-    1 kHz loop predicts ~0.1 s with no overshoot. 30–45° moves (X-lock, parking) settle in
-    0.1–0.15 s, close to the robot, and nothing buzzes at rest.
-  - The MapleSim steer inertia (0.01 kg·m² in `Swerve.initMapleSim`) is an ESTIMATE; no value
-    is published for this module. It sets how fast the wheels turn and park. Log a steer step
-    on the robot (X-lock from straight is easy) and adjust it until the sim's settle time
-    matches; don't go below 0.007, where MapleSim's integrator starts to ring.
-- **Drive speed.** The drive gains are feedforward only (kP 0, kS 0), so how closely speed
-  tracks depends on the motor model and drag. MapleSim's swerve drivetrain hardcodes a 1.4 /s
-  body drag, which held 1.5 m/s requests to 1.31 m/s (13% short at every speed). The sim now
-  uses 0.1 (MapleSim's base default, an ESTIMATE) and the Kraken X60 FOC model the robot's
-  drive actually runs, so 1.5 m/s reaches ~1.45 and 3.0 reaches ~2.92. The remaining ~3% is
-  kV 0.122 sitting a bit under what an FOC X60 needs; the real robot also loses a little to
-  friction (kS was never measured), so expect it near 1.40-1.46 m/s at a 1.5 request. To
-  calibrate, log applied drive volts V and speed v during a steady cruise and set
-  `setLinearDamping` in `Swerve.initMapleSim` to `((V - 0.037) / v - 2.091) / 0.1656`. If that
-  comes out near 1.4, the robot really does run 13% slow and needs drive kP. Turning has the
-  same hardcoded 1.4 drag (`setAngularDamping`), left as is and untested; rotation requests
-  are likely ~6% slow in sim.
-- **Gear ratios (checked against the Onshape CAD on 2026-10-16).**
-  - **Hood motor gearing:** the CAD gear train is Kraken X44 → 12t:48t → 10t pinion on the 190t
-    sectors = **76:1**. The sim used to derive 115:1 from the code's
-    `ShooterHoodConstants.ROTOR_TO_SENSOR_RATIO = 60`. The sim's physics now uses 76
-    (`HOOD_ROTOR_PER_ARM_ROT`).
-  - **Robot-code issue, for the team:** that 60 matches the old turret-era shooter (12:48, then
-    10:150). With the CANcoder geared 46:24 off the hood, the real rotor-to-CANcoder ratio is
-    76 × 24/46 = **39.65**, so the robot's fused hood velocity reads about 1.5× off. The robot
-    code here is left as is.
-  - **Hood geometry and travel:** the CANcoder gearing (46:24), the pivot, the 22.1° rest angle
-    and the swing direction all match the CAD; the hood swings 8.6° across the shot range. The
-    sector teeth allow only ~20–22° above rest, so the sim's top stop is now 0.11 code rotations.
-  - **Swerve:** the CAD's module setting says X3 10t (6.48:1), while the code uses 5.4:1 (X3
-    12t). Kept 5.4, since odometry would be ~20% off on the robot if it were wrong. The CAD is
-    probably stale.
-  - **Not settled from CAD:**
-    - The spindexer floor ratio: the MAX 90° box ratio isn't published.
-    - The feeder's motors and roller travel: `FEEDER_BALL_M_PER_ROTOR_REV` is a fire-rate knob.
-    - The intake roller's inertia.
-    - The intake's stow angle.
-  - **AdvantageScope model, cleaned 2026-10-16:**
-    - **Removed:** a duplicate X60 that sat 0.14" from the right flywheel motor and flickered;
-      the 36-part turret gearbox left under the shooter (gears, encoder, shafts, bearings,
-      spacers), which nothing drove, while its plates and nut strips stay; and the stray X44 on
-      the intake arm (the roller is an X60, per the team).
-    - **Rerun after a new CAD export:** run `split-robot-glb.mjs`, then
-      `node tools/advantagescope/prune-glb.mjs <in.glb> <out.glb> <rules>` with
-      `prune-rules-model.json` for `model.glb` and `prune-rules-model_0.json` for `model_0.glb`
-      (pass `--dry-run` in place of `<out.glb>` to list matches only).
-    - **Originals:** in `advantagescope/backup-2026-10-16-before-cleanup/` on the desktop PC
-      only; it's gitignored to keep ~100 MB out of the repo. To restore, copy them into both
-      `advantagescope/Robot_9410_2026/` and AdvantageScope's assets folder.
-- **Vision.** None in sim; odometry is ground truth. SOTM confidence reads 0.5 instead of 1.
-- **Fire rate.** `FEEDER_BALL_M_PER_ROTOR_REV` (ESTIMATE in `MechanismSimConstants`) was set
-  so the SOTM rewrite's ~110 rps feeder fired ~8 balls/s. This code runs the feeder at 2×
-  flywheel demand (~60 rps), which works out to ~5 balls/s in sim (computed, not timed). Count
-  balls per second on the robot and scale that constant to match.
-- **Mass and bumpers** (55 kg, 30"×28") and every value marked ESTIMATE in
-  `MechanismSimConstants` (intake rate, spindexer grip, arm inertias, hopper slide time).
-- **Shots.** See below.
-
-### Shot model
-
-The sim launches each ball from the *simulated* flywheel speed and hood position, so a shot
-taken before they settle misses. The launch model (`MechanismSimConstants`, "Shots") is fit to
-this robot's shot table and the setpoints the code commands (table + 1 rps, hood - 0.005):
+When you're done, the folder should look like this:
 
 ```
-exit speed (m/s)   = 0.220 × flywheel rotor rps
-launch angle (deg) = 65.5 - 131.5 × hood position (rotations)
+userAssets/
+└── Robot_9410_2026/
+    ├── config.json
+    ├── model.glb        chassis + everything bolted to it
+    ├── model_0.glb      intake arm
+    ├── model_1.glb      shooter hood
+    ├── model_2.glb      hopper extension
+    └── model_3..6.glb   swerve wheels FL, FR, BL, BR
 ```
 
-The SOTM rewrite's model (0.0986 / 58.81 / -50.37) was fit to the older turret-era shooter
-(62-89 rps, 2026-Robot `f155723`). This code uses the April 4 `NewShooterTesting` shooter
-(27-37 rps, 2026-Robot `e266cd4` / `0f75d1b`), where the old model falls about 3 m short.
+### Step 2 — Build the layout
 
-| Distance (m) | Commanded rps | Commanded hood | Exit (m/s) | Angle (°) | Flight time (s) |
-|---|---|---|---|---|---|
-| 1.95 | 28.4 | 0.039 | 6.25 | 60.4 | 0.57 |
-| 2.50 | 29.5 | 0.050 | 6.49 | 58.9 | 0.69 |
-| 3.00 | 30.5 | 0.060 | 6.71 | 57.6 | 0.78 |
-| 3.50 | 33.0 | 0.065 | 7.26 | 57.0 | 0.83 |
-| 4.10 | 35.0 | 0.075 | 7.70 | 55.6 | 0.90 |
-| 4.90 | 38.0 | 0.085 | 8.36 | 54.3 | 0.96 |
+Start the sim ([section 2](#2-run-the-sim)), then in AdvantageScope choose
+**File → Connect to Simulator**.
 
-`SimShotTest` checks every row scores and an under-speed shot misses. `RobotSimSmokeTest`
-holds shoot from 2.8 m with the real code (aim, spin-up, feed) and scores 10 of 10.
+1. Click **+** and add a **3D Field** tab. Pick the 2026 field.
+2. Drag **`MapleSim/RobotPose3d`** into **Poses**. Set it to **Robot** and choose
+   **9410 2026 Robot** as the model.
+   - Use `MapleSim/RobotPose3d`, not `Robot/Pose`. It includes the robot's height and tilt on the
+     bumps. `Robot/Pose` works too, but it stays flat.
+3. Drag **`Sim/Mechanisms/ComponentPoses`** onto that robot entry as **Component** poses. This
+   makes the intake, hood, hopper, and wheels move.
+4. Drag **`MapleSim/Fuel3d`** in as **Game Piece**. This shows every fuel ball: on the field, in
+   the air, and *inside* the robot (piled in the hopper, riding the spindexer, climbing the
+   feeder), so you can see how full the robot is.
 
-Caveats:
+Save the layout with **File → Save Layout** so you only have to do this once.
 
-- **Flight times are not measured.** The table's `SHOOTER_TOF` is provisional (copied from the
-  SOTM rewrite), and the angle terms lean on it. The sim's flight times above agree with it
-  within 2%. Time a few shots on video; if they differ, re-fit the angle terms.
-- **Exit speed looks high for one 4" wheel**: the CAD belts the motors 18t:24t, so the wheel
-  turns 0.75× the rotor, and 0.220 m/s per rotor rps is ~92% of its surface speed (a single
-  wheel on a fixed hood is usually under 50%). The hood's driven upper rollers probably make up
-  the difference; worth confirming with the flight-time video.
-- **Moving shots lead short in sim.** MapleSim's ball has no drag, but the SOTM solver assumes
-  `SOTM_DRAG_COEFFICIENT` = 0.24, so in sim the lead comes out 7-11% short. Set it to 0 to test
-  the solver's geometry in sim; leave it alone on the robot.
-- **Launch point** (0.20 m behind center, 0.57 m up) is carried over from the SOTM rewrite and
-  not checked against the new shooter's CAD.
-- **MapleSim counts a ball when its center enters a 47" box at the hub's height**, with no check
-  that it is falling, so sim scoring is more forgiving than the real hub.
+### Optional tabs
 
-### Autonomous in sim
-
-```powershell
-./gradlew.bat autoSim                                           # all four routes, ~1.5 min
-./gradlew.bat autoSim --tests frc.robot.sim.AutoBlueLeftSimTest # one route
-```
-
-Each test places the robot on the route's start pose with 8 preloaded fuel while disabled,
-picks the route in the dashboard's Auto Chooser, and runs the full 15 s auto on the real
-robot code. It fails if the auto aborts early, misses a waypoint, collects nothing, or scores
-less than the preload. The output logs each waypoint's closest approach and when it was
-reached, state changes, and the pose and speed every 0.1 s.
-
-Results on 2026-10-16, both with the same sim (bump fix, drive model, coupling fix):
-
-| Route | `sotm-testing` autos (before the merge) | With Chad's auto branch (this folder) |
+| Tab | Add | Shows |
 |---|---|---|
-| Blue Left | Pass: all 7 waypoints by 6.8 s, scored 25 | Fail: aborted at 14.0 s on the return leg, 26 collected, 0 scored |
-| Blue Right | Pass: scored 28 | Fail: aborted at 7.1 s, between waypoints 4 and 5 |
-| Red Left | Pass: scored 26 | Fail: aborted at 7.1 s, between waypoints 4 and 5 |
-| Red Right | Pass: scored 23 | Fail: aborted at 3.0 s at waypoint 2 |
+| **Mechanism** | `SmartDashboard/Sim/SideView` | 2D side view of the intake arm (orange) and hood (blue) |
+| **Line Graph** | `SmartDashboard/Sim/Flywheel/VelocityRps` and `SmartDashboard/shooterVelocity` | Actual vs. requested flywheel speed |
+| **2D Field** | `Robot/Pose`, `MapleSim/Fuel2d` | Top-down view |
 
-Why Chad's version aborts in sim (the per-waypoint 3 s deadline runs out each time):
+### Useful keys
 
-- **Corners are taken at full planned speed.** `PathProgress` plans the speed for passing an
-  intermediate waypoint from the next leg's length and speed limit, not from how sharp the
-  turn is (his README lists corner smoothing as later work). Waypoint 3 is crossed at about
-  2.6 m/s heading toward the side wall, followed by a ~100° turn. Stopping that at the 3 m/s²
-  chassis limit takes about 1 m, but there is about 0.4 m of room, so the sim robot hits the
-  wall and loses the time. Waypoint 6 is crossed at about 2.5 m/s and then turns 90° onto the
-  6 m return leg. The robot swings about 2 m wide into the trench lane and is still 1 m off
-  line when that leg's 3 s runs out. Both come from the code's own limits, so expect the same
-  on the robot.
-- **The 6 m return leg has almost no slack.** Even with perfect tracking, 6 m at 3 m/s²
-  takes 2.8 s, against a 3 s deadline.
-- **Stopping at waypoint 2 is marginal.** That leg runs open loop (heading not locked). The
-  robot comes off the bump at about 2.9 m/s, carries about 0.2 m past the 6" tolerance, and
-  has to creep back before the settle check passes. Blue Left made it at 2.98 s; Red Right
-  missed at 3.04 s. How hard the robot brakes open loop depends on drag and motor braking,
-  so this one is the most sim-sensitive.
+These are all under `SmartDashboard/`.
 
-The `sotm-testing` autos stop at every waypoint, so corners don't matter. They finish the
-route by about 6.8 s and start shooting at about 8.9 s. They do carry about 1 m past the last
-waypoint before aiming (Blue Left ends at x = 1.05 instead of 2.10), which Chad's settled
-arrival is meant to fix.
+| Key | Meaning |
+|---|---|
+| `readyToFire`, `headingOK`, `shooterAtSpeed` | Why the robot is or isn't firing |
+| `sotmValid`, `sotmConfidence`, `aimDeg`, `headingErrorDeg` | SOTM solver output |
+| `distanceToHopper`, `shooterVelocity`, `shooterHoodPos` | Shot target and setpoints |
+| `Sim/<Mechanism>/VelocityRps`, `…/AngleDeg`, `…/CurrentAmps` | Simulated mechanism state |
+| `Sim/IntakeDeployed`, `simHeldFuelCount`, `simOnBump` | Sim state |
 
-## Shoot on the move (`sotm-testing`)
+---
 
-Holding shoot now keeps driver translation available at the same speed as intaking
-(`DRIVE_WHILE_INTAKING_COEFFICIENT`, 40%). The runtime firecontrol classes `ShotCalculator`,
-`ShotLUT` and `ShotParameters` were adapted from
-[2026-ROBOT-SIM-TESTING](https://github.com/aydenterranella/2026-ROBOT-SIM-TESTING/tree/e2bfadbd89e17429873ec029ce2a8b123377f4ec/src/main/java/frc/firecontrol).
-Their FRC Team 5962 perSEVERE MIT attribution is retained. No MapleSim, projectile
-simulator, LUT generator, or simulation-only dependencies were added.
+## 2. Run the sim
 
-The solver converts measured robot-relative velocity into field coordinates, low-pass
-filters it (`SOTM_VELOCITY_FILTER_SECONDS`, 0.1 s), predicts the launcher through a
-20 ms release delay, includes rotational velocity at the rear-mounted launcher, and
-solves a drag-adjusted virtual target using Newton's method. Acceleration is not
-estimated: differencing measured velocity roughly tripled noise in the aim heading.
-Current RPS/hood tables and offsets remain intact: robot-center calibration distances
-are shifted by the 0.20 m rear launcher offset inside the lookup table so stationary
-shots retain their original demands. Phoenix already supplies a current pose, so no
-additional vision latency is applied.
+**From VS Code:** `Ctrl+Shift+P` → **WPILib: Simulate Robot Code**.
 
-The imported flight-time table is **provisional**: the reference used different RPS
-and hood settings. Measure flight times for this robot's retained calibration before
-relying on moving-shot accuracy. Verify the 0.20 m launcher offset and release delay
-on hardware too. No new on-robot shot calibration is claimed by the software tests.
+**From a terminal:**
 
-When the robot isn't driving (filtered translation under 0.1 m/s, including turning in
-place to aim), it uses the original standing shot unchanged, and tilt is not checked.
-While driving, both actual center distance and compensated calibration distance must
-remain within 1.95-4.9 m in the scoring zone. Feeding still requires the existing
-5-degree heading, hood, flywheel and feedback checks. Excessive tilt (over the tunable
-`SOTM_MAX_TILT_DEGREES`, 5 degrees), speed (over 3 m/s), invalid input, uncalibrated lead
-distance or solver nonconvergence prevents a moving shot and stops the shooter until a valid shot returns. Solver
-confidence is diagnostic; feed permission uses the explicit validity and readiness checks.
-
-Teleop aiming slews the heading target at up to `AIM_HEADING_SLEW_DEGREES_PER_SECOND`
-(90) so lead changes and moving/static fallbacks turn the robot smoothly, and adds the
-configured `Heading/kD` as damping. Lower the slew rate if the wheels still splay while
-aiming. Once translation and rotation settle within 1 degree of aim, wheels park
-instead of retaining the turn-in-place stance: parallel with SOTM on, or X-locked
-(`SwerveDriveBrake`) with SOTM off so the stationary shot resists pushes. Driver
-translation or drift beyond 2 degrees resumes normal aiming. This applies to teleop and
-the autonomous final aim. The turn-in-place wheel angles remain necessary while the
-robot is rotating.
-
-The **Shoot on move** button on Power Tool's Shot ready card is the kill switch. OFF
-restores the original stationary shot with driver translation held at zero while
-aiming. The button writes `/PowerLib/Shooting/SOTMRequestedEnabled`; `SotmSwitch`
-applies each new request every loop, with or without tuning, and the button shows the
-robot's reported `Shooting/SOTMEnabled`. Robot code starts with
-`SOTM_ENABLED_DEFAULT` (on).
-
-The Shot ready card also shows SOTM confidence, lead angle and flight time, and the
-compensated aim distance. The robot publishes
-`Shooting/SOTMEnabled`, `LeadDegrees`, `EffectiveDistanceMeters`, `TimeOfFlightSeconds`,
-`MotionCompensated`, `SOTMValid`, `SOTMConfidence`, `SolutionStatus`,
-`Drive/AimWheelsParked` and `Drive/AimWheelsLocked`. Tunable constants include
-`RobotContainer/Custom/DRIVE_WHILE_INTAKING_COEFFICIENT` (intake and shooting drive speed)
-and Shooting's `SOTM_MAX_DRIVETRAIN_SPEED_MPS`, `SOTM_RELEASE_DELAY_SECONDS`, `SOTM_DRAG_COEFFICIENT`,
-`SOTM_MAX_TILT_DEGREES`, `SOTM_VELOCITY_FILTER_SECONDS` and
-`AIM_HEADING_SLEW_DEGREES_PER_SECOND`. Source
-constants and `powerlib-constants.json` are kept in sync. Tests cover velocity lead,
-filtering, release latency, rotating-launcher velocity, solver failures, retained
-stationary calibrations, compensated readiness, the kill switch, intake-speed driving, aim
-slewing and parking.
-
-## PowerLib installation
-
-This branch starts from the fresh `main` robot project at `c37a98f33`.
-PowerLib source and Power Tool were installed from Robot-Library commit
-`5f73c86bbc72bbc5c4092657fabae3199e848722` with all options enabled:
-library, robot templates, vendor dependencies, generator/tools, Electron dashboard,
-and simulation skills. Robot and Power Tool production builds passed.
-
-Robot configuration uses original 2026-Robot commit
-`0f75d1b75d1428dd8b73213b2447adb292ab2125` (April 4, 2026, on
-`NewShooterTesting`). Seven mechanisms, swerve settings, shooting tables, field
-geometry and all 28 auto waypoints were compared against that commit. Power Tool
-configuration is saved in `power-tool/generated/powerlib-subsystems.json` and
-`power-tool/generated/powerlib-constants.json`; regenerate with
-`power-tool/scripts/generate-subsystem.ps1 -UpdateSubsystems`.
-
-The four autos use the original intake/return/turn/shoot sequence, per-leg speeds,
-tolerances and heading-lock choices. Red headings are converted to blue-field
-coordinates. Auto selection follows the reported alliance, with `None` as the default.
-The rewrite retains 100 ms dashboard updates, 200 ms tuning, 50 Hz logging,
-readiness/freshness checks, disabled-only pose seeding, start-pose guards and auto
-leg timeouts. Shooting allows distances from 1.95-4.9 m. A new 1.95 m row extends
-the closest April 4 segment (2.5-3.0 m): 27.4 RPS and 0.044 hood rotations before
-offsets. Shots closer than 1.95 m are rejected. The new values are extrapolated and need
-hardware tuning. `gradlew build` tests shot outputs, route values,
-state transitions, cancellation and timeout behavior.
-
-Motor configuration was audited again against April 4 commit `0f75d1b`. Shooter
-leader CAN 51 uses `reversed: false` in PowerLib to preserve the legacy
-CounterClockwise_Positive direction; followers 52 and 53 remain opposed. The other
-active mechanism leaders already use that direction. Feeder, shooter and spindexer
-also restore the legacy 140 A stator current limit on their leaders, explicitly
-saved in the subsystem JSON and emitted by the generator. PowerLib preserves the
-declared neutral modes; legacy full configuration writes could reset those modes.
-RegionalMotorConfigurationTest checks the Phoenix output configuration without
-hardware. Physical direction still needs verification on the robot.
-
-The audit includes feeder, intake roller/wrist, shooter/hood and spindexer CAN IDs,
-follower alignment, PID/feedforward, feedback ratios, encoder offsets, Motion Magic
-settings and position defaults/limits. Shared auto waypoints, Tuner hardware,
-controller, LED and camera constants retain the April 4 values. Field dimensions
-are corrected to 16.541 by 8.069 m and hub centers to red (11.915521, 4.0346376)
-and blue (4.6255178, 4.0346376), derived from the WPILib 2026 welded layout's opposing
-hub-face tags. The red zone ends at the corrected field length. The screenshot pose
-(13.27, 3.18) is about 1.602 m from the corrected red hub, below the retained 1.95 m
-minimum shooting distance; its target heading is about -32.25 degrees. The removed turret
-and legacy sweep feature are not reinstated; their active shooter/hood tables live
-in ShootingConstants. New PowerLib vision/readiness settings remain rewrite-specific.
-
-State handlers implement Idle/Ready, Intaking, Ejecting, Spinning Up, and Shooting.
-Left trigger collects, B requests eject, and right trigger requests shooting.
-A shooting request spins up first and feeds only when shooter velocity, hood position,
-heading, shot range, and feedback are ready. Losing readiness immediately stops feeding.
-Releasing B resumes a held shooting or intake trigger; releasing all triggers returns
-to `IDLE`. Intake can run while shooting. Shared geometry, interpolation,
-readiness, and shooter/feeder actions live in `ShootingUtils`. Values and driver behavior
-use the April 4 calibrations described above. Back seeds fresh vision position while disabled
-and uses fresh independent multi-tag heading when available, preserving heading otherwise;
-Start zeros heading while disabled, preserving X/Y. Test mode leaves outputs to SysId.
-
-Each state request has an owner: `requestState(state, owner)` updates only that owner's
-entry, and `clearRequest(owner)` removes it. The ordered handler list in `StateMachine`
-is the sole request priority: Ejecting, Shooting, Spinning Up, Intaking, then Idle/Ready.
-ButtonBindings.bindStates(button, pressState, releaseState, stateMachine::requestState)
-creates a stable owner per binding. Both triggers and B request IDLE on release, so an
-older button release cannot overwrite another held button's request. The function
-helper is ButtonBindings.bindFunctions(button, onPress, onRelease).
-
-HealthChecks in PowerLib owns signal freshness, finite-pose checks, and mechanism/drivetrain
-feedback checks. Vision, drive commands, and shooting readiness use it. Robot code chooses
-the mechanisms required for shooting. IntakingState owns collection and wrist travel limits;
-EjectingState owns reverse intake outputs; IdleState owns roller stops and idle posture.
-ShootingState owns the shot snapshot, required-mechanism health checks, and wrist-pulse
-timer, shared with SpinningUpState. It delegates held collection to IntakingState.
-StateMachine calls each handler's optional prepare hook before selection and reset hook
-on mode changes. Shooting preparation runs only while a shooting or spin-up request is
-pending; execution rechecks readiness every cycle. PowerDashboard publishes distance
-independently, so it continues updating during idle and intake. Shared shooting utilities
-contain no intake, wrist, or health behavior.
-
-Heading corrections track independent MT1 frame timestamps. When an MT1 frame
-arrives behind an already-applied MT2 position frame, its capture-time heading
-error is carried forward to the latest fusion timestamp, preserving intervening
-rotation and newer position corrections. Cameras remain unthrottled while disabled
-to keep reset frames fresh. SignalLogger records Vision/Heading/Status, Accepted,
-ErrorDegrees, PigeonYawDegrees and EstimatedDegrees. While disabled, fresh multi-tag
-MT1 frames automatically initialize heading once per disabled period after at least
-five distinct frames agree within 2 degrees for 0.25 s. Speed must be at most
-0.05 m/s and yaw rate at most 5 degrees/s, with fresh drivetrain feedback. This
-heading-only reset preserves X/Y and can recover errors larger than 15 degrees.
-Vision/HeadingStatus and Vision/MT1HeadingFresh are also published to Power Tool.
-While enabled, automatic correction still
-requires two reliable tags within 4 m, frame age at most 0.2 s, yaw rate at most
-45 degrees/s, and heading error at most 15 degrees. Back can reseed a larger heading
-error from fresh independent heading while disabled; Start zeros blue-field heading.
-
-The drive command receives live current state for intake/shooting speed scaling and
-hub alignment. Robot tests cover shot-table values, readiness, transitions,
-and button priority. PowerLib feedback-ratio validation also accepts signed CTRE
-ratios, retaining the rewrite's negative sensor-to-mechanism ratios.
-
-Autonomous stopping moves request braking before the tolerance boundary and require
-position, optional heading, and low measured translation/angular speed to hold continuously.
-The provisional arrival limits are 0.05 m/s, 5 degrees/s and 0.1 s, configured in AutoConstants;
-validate them and route timing on hardware. The April 4 waypoints, per-leg tolerances and
-heading locks are unchanged. Normal braking uses the shared chassis motion limiter;
-cancellation and faults stop immediately. Leg deadlines remain 3 s, final aiming 1 s and
-the overall routine 20 s. Final aiming uses the same completion check with a live hub heading
-and the last waypoint's position tolerance; a timeout aborts before requesting SHOOTING.
-The command caches completion during execute(), so isFinished() has no control side effects.
-
-Each regional auto now uses three continuous driving sections: points 1-2 before INTAKING,
-points 3-5 before READY, and points 6-7 before final aiming. DrivePathCommand retains its
-distance controller, heading history and chassis limiter across intermediate waypoints;
-DriveToPointCommand is the single-point wrapper around that same implementation. Intermediate
-points advance on position tolerance, while section endpoints require measured-speed settling.
-PathProgress caches braking bounds for lower future speed targets and the final stop. Per-leg
-settings use ordered indices, so duplicate coordinates retain their own policies. The active
-waypoint's 3 s deadline restarts only on advancement; timeout is checked before advancement.
-Velocity transitions stay acceleration-limited. Intermediate handoffs accept radius arrival
-or bounded forward plane crossings;
-corner smoothing remains later work.
-Physical corners, speed transitions and route timing still need validation on the robot.
-
-The regional paths explicitly enable bounded intermediate crossing. AutoConstants sets provisional
-limits of 0.25 m past the arrival plane and 0.5 m travel between position samples. The crossing and
-current pose must also be inside the waypoint's lateral tolerance. Each section seeds its first
-incoming leg from measured starting pose, processes multiple crossings in observed order, and
-retains controller history when it changes targets. Rejected crossings do not restart deadlines.
-Large sample jumps cannot prove crossing, while ordinary radius arrival still trusts current pose;
-small vision corrections remain indistinguishable from movement. Braking bounds account for the
-expanded handoff region. Crossing never completes an endpoint or bypasses an action boundary.
-Validate the crossing bounds with real autonomous speeds, loop timing and vision corrections.
-
-Regional driving sections also opt into CrossTrackController, using provisional AutoConstants
-settings of 1.5/s lateral P gain and a 0.75 m/s correction cap. The active segment remains anchored
-to its measured starting pose or preceding waypoint as the robot drifts and hands off targets.
-Within that segment, lateral correction returns toward its line and forward motion eases near
-the arrival plane. The combined translation request stays inside the existing braking speed
-budget before passing through ChassisMotionLimiter. Outside the segment or on zero-length legs,
-steering recovers directly toward the waypoint. Single-point commands and final aiming keep
-correction disabled by default. Endpoint settling, deadlines and immediate fault stops still apply.
-Validate the gain, correction cap, corner recovery and auto timing on hardware.
-
-Build and simulate with the WPILib 2026 JDK:
-
-```powershell
-$env:JAVA_HOME = 'C:/Users/Public/wpilib/2026/jdk'
-./gradlew.bat build
-./gradlew.bat simulateJava
+```bash
+./gradlew simulateJava
 ```
 
-Power Tool dependencies are installed locally and reproducible from `package-lock.json`.
-On another checkout, run `npm ci` and `npm run build` from `power-tool`, then use
-`power-tool/scripts/power-tool.cmd` to launch Electron. Build artifacts, dependencies,
-and machine-specific paths are ignored.
+> **Windows:** if Gradle fails with `Type T not present`, your shell is using a newer JDK than
+> GradleRIO supports. Set `JAVA_HOME` to WPILib's JDK (`C:\Users\Public\wpilib\2026\jdk`). VS
+> Code does this for you.
+
+### Using the Sim GUI
+
+> **Have the FRC Driver Station installed?** Skip this part. Choose **Use Real Driver Station**
+> when you launch the sim, then use the DS like normal.
+
+1. Drag your controller from **System Joysticks** onto slot **0** in **Joysticks**.
+2. Pick an alliance station in the **FMS** panel.
+3. Click **Teleoperated** (or **Autonomous**) under **Robot State**.
+
+Use a real controller. The Sim GUI's keyboard joystick has no right trigger, so you can't shoot
+from the keyboard.
+
+### Things the sim does on its own
+
+- **Spawns on your alliance.** While disabled, the robot is moved to your alliance's start spot
+  whenever the alliance changes. On blue, that's `(2.0, 4.0)` facing the red wall, and the mirror
+  of that on red. It never moves the robot while enabled.
+- **Deploys the hopper.** The hopper extension slides out the first time the robot is enabled,
+  like the real robot does at the start of a match.
+- **Loads the full field.** 360 fuel in the neutral zone, plus both depots.
+
+---
+
+## 3. Shoot on the move
+
+The code for this is in [`frc.firecontrol`](src/main/java/frc/firecontrol) and
+`StateMachine.runShootingToTarget()`.
+
+### How a shot is chosen
+
+1. **Solve.** [`ShotCalculator`](src/main/java/frc/firecontrol/ShotCalculator.java) gets the
+   robot's pose and field-relative velocity. A shot ball keeps the robot's velocity, so the
+   solver aims at a **virtual target**: the real target shifted by robot velocity × time of
+   flight. It uses Newton's method to find a flight time that agrees with the shot table, usually
+   within 2–3 iterations. It also accounts for latency (30 ms vision + 20 ms mechanism) and for
+   the launcher sitting 0.20 m behind the robot's center, facing backward.
+
+   The result is a **flywheel speed**, a **hood angle**, and a **heading to face**. The solver
+   returns *invalid* above 3 m/s, or outside 0.5–5 m from the target.
+2. **Fall back.** If the solver result is invalid, the robot looks up flywheel speed and hood
+   angle by distance from the `ShotConstants` tables and aims straight at the target.
+3. **Spin up.** The flywheel and hood go to their setpoints. The hood is clamped to its range.
+4. **Aim.** While shoot is held, `SwerveDriveCommand` drives in `AIM` mode. It holds the solver's
+   heading, and your translation is cut to 40%. Once the robot is stopped and within 5° of the
+   heading, the wheels **park straight** instead of staying in the turn-in-place "X". They unpark
+   if the heading drifts past 8°.
+5. **Gate.** The feeder and spindexer only run while `readyToFire` is true:
+   - `headingOK`: within **15°** of the target heading when the solver is valid, or within **5°**
+     when using the fallback or passing
+   - `shooterAtSpeed`: actual flywheel speed > requested − 1.5 rps
+
+### Targets
+
+- **In your alliance zone:** your hub (`HOPPER_BLUE` / `HOPPER_RED`).
+- **In the other alliance's zone:** 1 m in from the nearer of your two back corners.
+- **Passing** (neutral zone or on a bump): a fixed heading (0° on blue, 180° on red) instead of
+  the solver's heading.
+
+### The shot table
+
+`SHOOTER_SPEEDS`, `HOOD_ANGLES`, and `SHOOTER_TOF` in
+[`ShotConstants`](src/main/java/frc/robot/constants/ShotConstants.java) were **tuned on the real
+robot**. They're combined into `SHOT_LUT` and loaded into the solver. The solver uses the time of
+flight to lead the target, so if you retune speeds or angles, **keep `SHOOTER_TOF` accurate too**.
+
+[`GenerateLUT`](src/main/java/frc/firecontrol/GenerateLUT.java) and
+[`ProjectileSimulator`](src/main/java/frc/firecontrol/ProjectileSimulator.java) are a one-time
+tool that can generate a starting table from physics (RK4 with drag and Magnus lift). To use it,
+run `GenerateLUT.main` and paste the printed arrays in. Nothing calls it at runtime.
+
+### Tuning knobs
+
+| Where | What |
+|---|---|
+| `StateMachine()` constructor → `ShotCalculator.Config` | Launcher offset, max SOTM speed, scoring distance range |
+| `ShotCalculator.Config` defaults | Latency (`phaseDelayMs`, `mechLatencyMs`), drag, Newton solver limits |
+| `runShootingToTarget()` | Heading tolerances (15° / 5°), at-speed margin (1.5 rps), feeder/spindexer speeds while firing |
+| `SwerveDriveCommand` | `SLOW_DRIVE_SPEED` (40%), `AIM_PARK_DEG` (5°), `AIM_RELEASE_DEG` (8°) |
+
+---
+
+## 4. How the sim works
+
+The main rule: **the robot code doesn't know it's being simulated.** The subsystems send normal
+Phoenix 6 requests. Every loop, the sim:
+
+1. reads the voltage each simulated TalonFX is applying,
+2. runs it through a physics model,
+3. writes the resulting position and velocity back into the TalonFX/CANcoder sim state.
+
+Because of this, PID, MotionMagic, the at-speed check, and the SOTM gate all behave like they do
+on the real robot. That includes being slow, overshooting, and missing a shot because the flywheel
+hasn't spun up yet.
+
+All sim code is in [`src/main/java/frc/robot/sim/`](src/main/java/frc/robot/sim). None of it runs
+on the real robot: it's all created in `Robot.simulationInit()`, and `Swerve` only builds its
+MapleSim model when `Utils.isSimulation()` is true. The physical numbers are in
+[`MechanismSimConstants`](src/main/java/frc/robot/sim/MechanismSimConstants.java).
+
+**Robot frame** (used everywhere in the sim): +X is forward (the intake side), +Y is left, +Z is
+up, and the origin is the robot's center on the floor. The shooter faces −X.
+
+### The sim loop
+
+`Robot.simulationPeriodic()` runs every 20 ms. The order matters:
+
+```mermaid
+flowchart TD
+    A[Spawn robot at alliance start<br/><i>only while disabled</i>] --> B[HopperSim.update<br/>slide extension, add/remove collision box]
+    B --> C[MechanismSimManager.update<br/>step flywheel, feeder, spindexer,<br/>intake roller, wrist, hood]
+    C --> D[IntakeSim.update<br/>pick up fuel under the rollers]
+    D --> E[FuelBumpSim.update<br/>fuel rolls on bump slopes]
+    E --> F[SimulatedArena.simulationPeriodic<br/>MapleSim: drivetrain, collisions, projectiles]
+    F --> G[Swerve.updateBumpSim<br/>robot Z / pitch / roll on bumps]
+    G --> H[Swerve.updateSimState + syncOdometryFromSim<br/>gyro → Pigeon2, odometry ← ground truth]
+    H --> I[runFuelPath<br/>hopper → spindexer → feeder → launch shots]
+    I --> J[Publish fuel poses for AdvantageScope]
+```
+
+- Mechanisms step **before** the intake check, so "is the arm down?" uses this loop's angle.
+- The bump sim runs **after** MapleSim and **before** odometry sync, so the CTRE pose includes
+  the bump correction.
+
+### The field
+
+`Robot()` replaces MapleSim's arena with `new Arena2026Rebuilt(false)` before `RobotContainer` is
+built. The `false` turns off MapleSim's bump colliders so robots can drive over the bumps (our own
+bump sims handle them instead). `setEfficiencyMode(false)` loads the full match's worth of fuel.
+
+### Drivetrain — MapleSim ↔ Phoenix 6
+
+`Swerve.initMapleSim()` builds a MapleSim `SwerveDriveSimulation`: 55 kg, 30"×28" bumpers, Kraken
+X60s, 5.4:1 drive / 12.1:1 steer, 2" Colsons, and a Pigeon 2. It connects each module to the CTRE
+devices through [`PhoenixSimUtil`](src/main/java/frc/robot/sim/PhoenixSimUtil.java):
+
+- On every MapleSim sub-tick, the adapter writes the simulated rotor and encoder values into the
+  TalonFX/CANcoder sim states. It then returns the voltage CTRE is commanding, and MapleSim uses
+  it to push the wheels.
+- `regulateForSimulation()` removes the real encoder offsets and inversions and uses simpler steer
+  gains. With the real calibration, the sim robot sits in place and vibrates.
+- Each loop, MapleSim's gyro is copied into the Pigeon 2, and CTRE odometry is reset to MapleSim's
+  ground-truth pose. Vision is skipped in sim.
+
+### Mechanisms
+
+[`MechanismSimManager`](src/main/java/frc/robot/sim/MechanismSimManager.java) owns six physics
+models and steps them once per loop.
+
+#### Rollers — [`RollerMechanismSim`](src/main/java/frc/robot/sim/RollerMechanismSim.java)
+
+These are the flywheel (3× X60), feeder (2× X44), spindexer (1× X60), and intake roller (1× X60).
+Each one is a WPILib `DCMotorSim` plus Coulomb friction:
+
+```
+TalonFX applied volts − friction (SysId kS) → DCMotorSim → rotor pos/vel → TalonFX sim state
+```
+
+- **Inertia is back-calculated from SysId kA** (`J = kA · Kt / (2π · R)`), so it includes belts,
+  pulleys, and bearings. The intake roller has no SysId data, so its numbers are estimates.
+- Only the leader motor is simulated. Followers are included in the `DCMotor` count.
+- Each roller reports its current to MapleSim's battery, so spinning up the flywheel sags the
+  battery voltage.
+
+#### Arms — [`ArmMechanismSim`](src/main/java/frc/robot/sim/ArmMechanismSim.java)
+
+These are the intake wrist (2× X44, 44.44:1) and the hood (1× X44). Each one is a WPILib
+`SingleJointedArmSim` with gravity and hard stops. The tricky part is converting between three
+kinds of units:
+
+| Unit | What it is |
+|---|---|
+| Physical angle θ | Radians, 0 = forward, + = up. What gravity uses and what gets drawn. |
+| Mechanism position P | Rotations. What the code commands (e.g. `INTAKE_MAX = -0.452`). |
+| Raw sensor values | What gets written to the CANcoder/TalonFX, after the magnet offset, direction, and gear ratios |
+
+θ and P are tied together by one reference pose taken from CAD. Each loop, the sim goes from
+θ → P → raw values using the **same `PositionSubsystemConfig` the real subsystem uses**. That
+means changing an offset or ratio in the constants files doesn't break the sim.
+
+Two things that will bite you:
+- **The hood CANcoder isn't on the pivot.** It's geared 46:24 off the arm, so one code-rotation is
+  24/46 of an arm rotation. The code's hood range of 0.005–0.15 rotations is about 27° of real
+  travel, which matches the CAD.
+- **The rotor has to move with P, not with the raw CANcoder.** Otherwise the negative
+  `SensorToMechanismRatio` makes the PID drive the arm into its hard stop. `MechanismSimTest`
+  checks this.
+
+#### Hopper extension — [`HopperSim`](src/main/java/frc/robot/sim/HopperSim.java)
+
+The hopper extension has no motor in code, so it's sim-only. On the first enable, it slides out
+over 0.5 s. Once it's more than halfway out, a collision box is added to the MapleSim chassis, so
+it hits walls, the hub, and other robots. Fuel is filtered out of that box, because the real
+extension sits about 10" up and balls roll under it.
+
+### Fuel: from the floor to the hub
+
+```mermaid
+flowchart LR
+    F[Fuel on field] -->|IntakeSim| A[Arc over roller<br/>0.3 s]
+    A --> H[Hopper pile<br/>gravity + collisions]
+    H -->|spinning floor drags<br/>balls to the rim| S[Spindexer]
+    S -->|feeder funnel| FD[Feeder<br/>climbs to flywheel]
+    FD -->|SimShot.launch| P[MapleSim projectile]
+    P -->|scores or misses| F
+```
+
+1. **Pickup — [`IntakeSim`](src/main/java/frc/robot/sim/IntakeSim.java).** MapleSim's built-in
+   intake grabs any ball that touches the bumper. Ours only takes fuel that's under the rollers
+   (15"–28.5" in front of center, ±10" side to side), and only when:
+   - the state is `INTAKING`, **and**
+   - the arm is actually all the way down (within 0.03 rotations of `INTAKE_MAX`), **and**
+   - the roller is spinning faster than 20 rps.
+
+   It takes at most 10 balls/s and holds up to 65. Fuel it can't take yet gets pushed along by
+   the bumper.
+2. **Inside the robot — [`FuelPathSim`](src/main/java/frc/robot/sim/FuelPathSim.java).** Every
+   ball in the robot is simulated:
+   - **Hopper:** loose balls with gravity and ball/wall collisions (position-based, 4 substeps per
+     loop). Outside the spindexer, the floor is a funnel that rolls balls back onto it.
+   - **Spindexer:** balls touching the spinning floor are dragged around with it and pushed out to
+     the rim, where the feeder entrance is.
+   - **Feeder:** pulls in a ball that's near its entrance and carries it up a path taken from CAD,
+     keeping balls one ball-width apart. A ball that reaches the flywheel becomes a shot.
+
+   The spindexer and feeder move at their **simulated** speeds, so the fire rate (about 8 balls/s)
+   and the delay before the first shot come from the mechanisms, not a timer.
+3. **Launch — [`SimShot`](src/main/java/frc/robot/sim/SimShot.java).** Each ball leaves from
+   0.20 m behind center and 0.57 m up, with the robot's velocity added. It uses the **actual**
+   simulated flywheel speed and hood angle, not the setpoints, so shooting before they've settled
+   misses.
+
+#### How the shot model is calibrated
+
+The launch model isn't a guess at ball physics. It was fit to our real shot table. For each table
+row, we solved for the exit speed and angle that reach the 1.83 m hub opening after exactly the
+table's time of flight, using MapleSim's gravity. That gives:
+
+```
+exit speed (m/s)   = 0.0986 × flywheel rotor rps
+launch angle (deg) = 58.81 − 50.37 × hood position (rotations)
+```
+
+The fit is within 1.2°, and every row arrives within 0.11 m of the opening height. `SimShotTest`
+fires one shot per row and checks that each one scores. **If the shot table changes a lot,
+re-fit these numbers** (they're in the "Shots" section of `MechanismSimConstants`). Otherwise the
+sim stops matching the real robot.
+
+### Bumps
+
+MapleSim's field is flat, and we turned its bump colliders off, so two classes add the 16.5 cm
+bumps back:
+
+- **[`RobotBumpSim`](src/main/java/frc/robot/sim/RobotBumpSim.java)** (adapted from KAISER 6989)
+  follows each module over the bump profile to get the robot's height, pitch, and roll. On a
+  ramp, it takes over the robot's X motion: below about 1.8 m/s (`√(2gh)`), the robot slides back
+  instead of cresting. Crossing at an angle makes the climb easier. The result is published as
+  `MapleSim/RobotPose3d`.
+- **[`FuelBumpSim`](src/main/java/frc/robot/sim/FuelBumpSim.java)** does the same for fuel. A
+  rolling ball on a slope is pulled back by (5/7)·g·sinθ, and it's drawn at the bump's surface
+  height.
+
+### How the 3D model moves
+
+`MechanismSimManager.publishTelemetry()` publishes `Sim/Mechanisms/ComponentPoses`, an array of 7
+poses. Each one moves a part **relative to where the CAD draws it**:
+
+| Index | Part | Motion |
+|---|---|---|
+| 0 | Intake arm | Rotates about its pivot by (sim angle − CAD angle) |
+| 1 | Hood | Rotates about the flywheel axle by (sim angle − CAD angle) |
+| 2 | Hopper extension | Slides back by however far it is from fully out |
+| 3–6 | Swerve wheels FL, FR, BL, BR | Spins about the axle by MapleSim's wheel position, then steers from the CAD heading to the module heading |
+
+The order has to match `model_0.glb`–`model_6.glb`. For how the CAD frame maps to the robot frame,
+see [`advantagescope/README.md`](advantagescope/README.md).
+
+### Tuning the sim
+
+Every value in `MechanismSimConstants` is labeled with where it came from: **CAD**, **SysId**, or
+**ESTIMATE**. If the sim doesn't match the robot, check the `ESTIMATE` values first:
+
+| Constant | Controls |
+|---|---|
+| `INTAKE_BALLS_PER_SECOND` | How fast the intake swallows fuel |
+| `FEEDER_BALL_M_PER_ROTOR_REV` | Fire rate (raise it to shoot faster) |
+| `SPINDEXER_REV_PER_ROTOR_REV`, `SPINDEXER_GRIP_PER_SEC`, `SPINDEXER_FLING_MPS2` | How the spindexer moves balls |
+| `INTAKE_WRIST_J_KG_M2`, `HOOD_J_KG_M2` | How fast the arms move |
+| `INTAKE_ROLLER_J_KG_M2`, `INTAKE_ROLLER_FRICTION_VOLTS` | Intake roller spin-up |
+| `HOPPER_DEPLOY_SECS` | Hopper slide time |
+
+---
+
+## 5. Tests
+
+The tests are in [`src/test/java/frc/robot/sim/`](src/test/java/frc/robot/sim):
+
+| Test | Checks |
+|---|---|
+| `MechanismSimTest` | Builds the **real** subsystems with the sims attached; the intake, hood, and flywheel reach their setpoints. Catches sign and offset mistakes. |
+| `SimShotTest` | Every shot table row scores when stationary, and a slow flywheel falls short |
+| `FuelPathSimTest` | Fires about 8 balls/s. Nothing fires unless both the spindexer and feeder run. A picked-up ball gets shot. |
+| `FieldFuelTest` | Fuel rolls over or back off the bumps correctly. The intake only takes fuel from under the rollers, at its rate limit. |
+| `HopperSimTest` | Deploys on enable, hits the wall before the bumper does, and fuel passes under it |
+| `RobotBumpSimTest` | A slow robot slides back, a fast robot crosses |
+| `ShootingDriveTest` | Holding shoot slows the robot and parks the wheels straight |
+| `RobotSimSmokeTest` | Builds the whole `Robot` and runs the sim loop end to end |
+
+```bash
+./gradlew test
+```
+
+To run one test class:
+
+```bash
+./gradlew test --tests frc.robot.sim.MechanismSimTest
+```
+
+Each test class gets its own JVM (`forkEvery = 1`), because the HAL, NetworkTables, and the
+MapleSim arena are global. Some tests sleep in real time, so the full suite takes a while.
+
+---
+
+## 6. Updating the 3D model after a CAD change
+
+You only need this if the CAD changed. Otherwise, use the folder from the Drive
+([section 1](#step-1--install-the-robot-model-one-time)).
+
+1. In Onshape, open **Main Assembly** and choose **Export**, with these settings:
+   - Format **GLB**
+   - "Y axis up" **unchecked**
+   - Resolution **Medium**
+   - Compress **off**
+2. From the repo root, run this (needs [Node.js](https://nodejs.org/) 18+, no npm install):
+
+   ```bash
+   node tools/advantagescope/split-robot-glb.mjs "<path to Main Assembly.glb>" advantagescope/Robot_9410_2026
+   ```
+
+3. Copy `advantagescope/Robot_9410_2026` into AdvantageScope's user assets folder and restart
+   AdvantageScope. Upload the new folder to the Drive too, so everyone else gets it.
+4. The script prints each swerve wheel's center and CAD heading. If they changed, update
+   `WHEEL_CENTERS` / `WHEEL_CAD_STEER_RAD` in `MechanismSimConstants`.
+
+**If a part shows up on the wrong component**, add its Onshape instance ID to the lists at the top
+of the script (`INTAKE_FIXED_IDS`, `HOOD_IDS`, `HOPPER_IDS`, `SKIP_IDS`). More detail is in
+[`advantagescope/README.md`](advantagescope/README.md).
+
+---
+
+## 7. Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `Type T not present` when running Gradle | Use the WPILib JDK (`C:\Users\Public\wpilib\2026\jdk`), or build from WPILib VS Code |
+| "9410 2026 Robot" isn't in the model list | The `.glb` files aren't in `userAssets/Robot_9410_2026/`, or you didn't restart AdvantageScope |
+| The robot shows up, but its parts don't move | Drag `Sim/Mechanisms/ComponentPoses` onto the robot entry as **Component**, not as its own pose |
+| Parts are floating or offset | `config.json` and the GLBs come from different exports. Copy the whole folder again. |
+| The robot is flat on the bumps | You're using `Robot/Pose`. Use `MapleSim/RobotPose3d`. |
+| The robot spawned in the wrong place | Change the alliance **while disabled**. The sim only moves the robot while disabled. |
+| The intake won't pick anything up | The arm has to be fully down and the rollers spinning. Give it about half a second, and check `Sim/IntakeDeployed`. |
+| Holding shoot, but nothing fires | Check `readyToFire` → `headingOK` / `shooterAtSpeed`. Over 3 m/s the solver returns invalid, and the fallback needs a 5° heading. |
+| Sim tests hang | Run one class at a time with `--tests` |
+
+---
+
+## 8. Credits
+
+- **[MapleSim](https://github.com/Shenzhen-Robotics-Alliance/maple-sim)** (Shenzhen Robotics
+  Alliance): field, drivetrain, and game piece physics. The MapleSim ↔ Phoenix 6 adapter pattern
+  comes from their AKit-MapleSim-Enhanced example.
+- **[FRC-Rebuilt-BumpSim](https://github.com/haar09/FRC-Rebuilt-BumpSim)** (KAISER 6989, MIT):
+  `RobotBumpSim`, with local changes.
+- **FRC Team 5962 perSEVERE** (MIT): `ShotCalculator` and `ProjectileSimulator`.
+- **[AdvantageScope](https://github.com/Mechanical-Advantage/AdvantageScope)** (Team 6328).

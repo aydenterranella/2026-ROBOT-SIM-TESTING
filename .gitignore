@@ -186,18 +186,7 @@ compile_commands.json
 # Eclipse generated file for annotation processors
 .factorypath
 
-# Power Tool dependencies, compiled output, and machine-specific installation paths
-power-tool/node_modules/
-power-tool/dist-renderer/
-power-tool/dist-electron/
-power-tool/.vite/
-**/.powerlib-source-root
-*.powerlib.bak
-*.powerlib.bak.*
-
-# Locally packaged Power Tool apps
-/PowerTool-local/
-/PowerTool/
-
-# SOTM-POWERSIM: local backup of the AdvantageScope model before the 2026-10-16 cleanup
-advantagescope/backup-*/
+# Claude
+.claude
+# Generated AdvantageScope robot models (large) — see advantagescope/README.md
+advantagescope/Robot_9410_2026/*.glb

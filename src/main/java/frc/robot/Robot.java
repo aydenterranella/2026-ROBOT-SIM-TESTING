@@ -4,7 +4,10 @@
 
 package frc.robot;
 
-import edu.wpi.first.hal.AllianceStationID;
+
+import com.ctre.phoenix6.SignalLogger;
+
+// import edu.wpi.first.wpilibj.DataLogManager;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
@@ -14,12 +17,11 @@ import edu.wpi.first.networktables.StructPublisher;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.RobotBase;
+import edu.wpi.first.wpilibj.RobotController;
 import edu.wpi.first.wpilibj.TimedRobot;
-import edu.wpi.first.wpilibj.simulation.DriverStationSim;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
-import frc.powerlib.subsystems.PowerSubsystem;
 import frc.robot.sim.FuelBumpSim;
 import frc.robot.sim.FuelPathSim;
 import frc.robot.sim.HopperSim;
@@ -28,10 +30,13 @@ import frc.robot.sim.MechanismSimConstants;
 import frc.robot.sim.MechanismSimManager;
 import frc.robot.sim.SimShot;
 import frc.robot.subsystems.StateMachine;
+import frc.robot.subsystems.StateMachine.RobotState;
 import java.util.ArrayList;
 import java.util.Optional;
 import org.ironmaple.simulation.SimulatedArena;
 import org.ironmaple.simulation.seasonspecific.rebuilt2026.Arena2026Rebuilt;
+
+
 
 public class Robot extends TimedRobot {
   private Command m_autonomousCommand;
@@ -69,10 +74,8 @@ public class Robot extends TimedRobot {
           .publish();
 
   public Robot() {
+    SignalLogger.setPath("/U/ctre-logs/");
     if (RobotBase.isSimulation()) {
-      // Build real TalonFX/CANcoder devices so MechanismSimManager's physics drives the same
-      // Phoenix closed loops the real robot runs. Must happen before any subsystem exists.
-      PowerSubsystem.usePhysicsSimulation(true);
       // Override the arena before RobotContainer (which constructs Swerve and registers
       // the drivetrain with the arena). false = no ramp colliders so the robot can drive
       // over the field bumps instead of being stopped by them.
@@ -82,28 +85,33 @@ public class Robot extends TimedRobot {
       // depots.
       arena.setEfficiencyMode(false);
       SimulatedArena.overrideInstance(arena);
-      // The Sim GUI starts "Disconnected" and reports no alliance until a mode is picked, so the
-      // auto chooser (filtered by alliance) only offered "None" until the robot had been enabled.
-      // A real DS connects disabled with its station set. Default to Blue 1 (the side the sim
-      // spawns on); the GUI copies it into its Alliance Station box, where it can be changed.
-      if (DriverStation.getAlliance().isEmpty()) {
-        DriverStationSim.setAllianceStationId(AllianceStationID.Blue1);
-        DriverStationSim.notifyNewData();
-        DriverStation.refreshData();
-      }
     }
     m_robotContainer = new RobotContainer();
   }
 
   @Override
+  public void robotInit() {
+    // DataLogManager.start();
+    // DataLogManager.logNetworkTables(false);
+    SmartDashboard.putBoolean("driveInverted",false);
+    SmartDashboard.putBoolean("velocityLock", false);
+
+    SmartDashboard.putBoolean("slowSpindexer", false);
+    SmartDashboard.putBoolean("slowShooter", false);
+    SmartDashboard.putBoolean("slowFeeder", false);
+  }
+
+  @Override
   public void robotPeriodic() {
+    SignalLogger.writeDouble("Voltage", RobotController.getBatteryVoltage(), "V");
+    SignalLogger.writeDouble("CAN Utilization", RobotController.getCANStatus().percentBusUtilization, "%");
+    SignalLogger.writeDouble("CAN Error Count", RobotController.getCANStatus().receiveErrorCount, "#");
+    m_robotContainer.setAuto();
     CommandScheduler.getInstance().run();
   }
 
   @Override
-  public void disabledInit() {
-    m_robotContainer.resetForMode();
-  }
+  public void disabledInit() {}
 
   @Override
   public void disabledPeriodic() {}
@@ -113,12 +121,13 @@ public class Robot extends TimedRobot {
 
   @Override
   public void autonomousInit() {
-    m_robotContainer.resetForMode();
     m_autonomousCommand = m_robotContainer.getAutonomousCommand();
 
     if (m_autonomousCommand != null) {
       CommandScheduler.getInstance().schedule(m_autonomousCommand);
     }
+    
+    m_robotContainer.getStateMachine().setMatchStarted();
   }
 
   @Override
@@ -129,10 +138,12 @@ public class Robot extends TimedRobot {
 
   @Override
   public void teleopInit() {
-    m_robotContainer.resetForMode();
     if (m_autonomousCommand != null) {
       m_autonomousCommand.cancel();
     }
+    
+    m_robotContainer.getStateMachine().setMatchStarted();
+    m_robotContainer.resetState();
   }
 
   @Override
@@ -142,18 +153,6 @@ public class Robot extends TimedRobot {
   public void teleopExit() {}
 
   @Override
-  public void testInit() {
-    CommandScheduler.getInstance().cancelAll();
-    m_robotContainer.resetForMode();
-  }
-
-  @Override
-  public void testPeriodic() {}
-
-  @Override
-  public void testExit() {}
-
-  @Override
   public void simulationInit() {
     // Populate the Arena2026Rebuilt field with fuel balls and scoring targets.
     SimulatedArena.getInstance().resetFieldForAuto();
@@ -161,14 +160,15 @@ public class Robot extends TimedRobot {
     var sm = m_robotContainer.getStateMachine();
     hopperSim = new HopperSim(sm.drivetrain.getDriveSimulation());
     mechanismSim = new MechanismSimManager(sm, hopperSim);
+    // Only collect fuel once the intake arm has physically swung down, not the instant the
+    // state changes to INTAKING.
     fuelPathSim = new FuelPathSim();
-    // The robot can collect while INTAKING or while spinning up/shooting with intake held, so
-    // gate on the physical state: arm actually swung down and rollers spinning inward.
     intakeSim = new IntakeSim(
         sm.drivetrain.getDriveSimulation(),
         fuelPathSim,
-        () -> mechanismSim.isIntakeDeployed()
-            && mechanismSim.getIntakeRollerVelocityRps()
+        () -> sm.getCurrentState() == RobotState.INTAKING
+            && mechanismSim.isIntakeDeployed()
+            && Math.abs(mechanismSim.getIntakeRollerVelocityRps())
                 > MechanismSimConstants.INTAKE_ROLLER_INTAKING_RPS);
   }
 
@@ -187,14 +187,14 @@ public class Robot extends TimedRobot {
 
     // Slides the hopper out on first enable and adds/removes its collision box before the arena
     // steps.
-    hopperSim.update();
+    if (hopperSim != null) hopperSim.update();
 
     // Step mechanism physics first so the intake-deployed check below sees this loop's arm angle.
-    mechanismSim.update();
+    if (mechanismSim != null) mechanismSim.update();
 
     // Toggle the intake zone before the arena ticks so contact detection runs with
     // the correct extended/retracted state for this frame.
-    intakeSim.update();
+    if (intakeSim != null) intakeSim.update();
 
     // Fuel rolls up and back down the bumps instead of passing through them at floor height.
     FuelBumpSim.update();
@@ -233,7 +233,7 @@ public class Robot extends TimedRobot {
 
     // Fuel inside the robot: flying in from the rollers, piled in the hopper, riding the
     // spindexer, and climbing the feeder.
-    allFuelPoses.addAll(fuelPathSim.getPoses(sm.drivetrain.getSimPose3d()));
+    if (fuelPathSim != null) allFuelPoses.addAll(fuelPathSim.getPoses(sm.drivetrain.getSimPose3d()));
 
     Pose3d[] fuel3d = allFuelPoses.toArray(Pose3d[]::new);
     simFuelPoses3dPublisher.set(fuel3d);
@@ -244,7 +244,7 @@ public class Robot extends TimedRobot {
     }
     simFuelPoses2dPublisher.set(fuel2d);
 
-    SmartDashboard.putNumber("simHeldFuelCount", fuelPathSim.getCount());
+    SmartDashboard.putNumber("simHeldFuelCount", fuelPathSim != null ? fuelPathSim.getCount() : 0);
     SmartDashboard.putNumber("simFuelVisibleCount", fuel3d.length);
   }
 
@@ -276,4 +276,15 @@ public class Robot extends TimedRobot {
                   mechanismSim.getHoodPositionRotations()));
     }
   }
+
+  @Override
+  public void testInit() {
+    CommandScheduler.getInstance().cancelAll();
+  }
+
+  @Override
+  public void testPeriodic() {}
+
+  @Override
+  public void testExit() {}
 }

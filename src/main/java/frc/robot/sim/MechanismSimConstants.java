@@ -11,9 +11,8 @@ import edu.wpi.first.math.system.plant.DCMotor;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import frc.robot.constants.FeederConstants;
-import frc.robot.constants.IntakeWristConstants;
+import frc.robot.constants.IntakeConstants;
 import frc.robot.constants.ShooterConstants;
-import frc.robot.constants.ShooterHoodConstants;
 import frc.robot.constants.SpindexerConstants;
 
 /**
@@ -76,17 +75,16 @@ public final class MechanismSimConstants {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Shooter flywheel — 3x Kraken X60 (leader + 2 followers), 4" wheels. CAD belts 18t motor
-  // pulleys to 24t on the flywheel axle, so the wheel turns 0.75x the rotor. Everything here is in
-  // rotor units (kV 0.124 V/rps matches a bare X60 FOC, which only confirms that), so that's fine.
+  // Shooter flywheel — 3x Kraken X60 (leader + 2 followers), direct drive, 4" wheels.
+  // kV from SysId (0.124 V/rps) matches a bare X60 FOC free speed, so the ratio really is 1:1.
   // Velocity control uses FOC, so we model the FOC motor curve.
   // ---------------------------------------------------------------------------------------------
   public static final DCMotor FLYWHEEL_GEARBOX = DCMotor.getKrakenX60Foc(3);
   /** SysId-derived, ~1.15e-3 kg·m² at the motor shaft. */
   public static final double FLYWHEEL_J_KG_M2 =
-      inertiaFromKa(ShooterConstants.KA.get(), FLYWHEEL_GEARBOX);
+      inertiaFromKa(ShooterConstants.FLYWHEEL_KA, FLYWHEEL_GEARBOX);
   /** Friction = SysId kS (volts). */
-  public static final double FLYWHEEL_FRICTION_VOLTS = ShooterConstants.KS.get();
+  public static final double FLYWHEEL_FRICTION_VOLTS = ShooterConstants.FLYWHEEL_KS;
 
   // ---------------------------------------------------------------------------------------------
   // Feeder — 2x motors, 1:1 in code. SysId kV (0.098 V/rps) is too low for an X60
@@ -94,23 +92,21 @@ public final class MechanismSimConstants {
   // ---------------------------------------------------------------------------------------------
   public static final DCMotor FEEDER_GEARBOX = DCMotor.getKrakenX44Foc(2);
   public static final double FEEDER_J_KG_M2 =
-      inertiaFromKa(FeederConstants.KA.get(), FEEDER_GEARBOX);
-  public static final double FEEDER_FRICTION_VOLTS = FeederConstants.KS.get();
+      inertiaFromKa(FeederConstants.FEEDER_KA, FEEDER_GEARBOX);
+  public static final double FEEDER_FRICTION_VOLTS = FeederConstants.FEEDER_KS;
 
   // ---------------------------------------------------------------------------------------------
   // Spindexer — 1x Kraken X60, 1:1 in code (kV 0.124 matches X60).
   // ---------------------------------------------------------------------------------------------
   public static final DCMotor SPINDEXER_GEARBOX = DCMotor.getKrakenX60Foc(1);
   public static final double SPINDEXER_J_KG_M2 =
-      inertiaFromKa(SpindexerConstants.KA.get(), SPINDEXER_GEARBOX);
-  public static final double SPINDEXER_FRICTION_VOLTS = SpindexerConstants.KS.get();
+      inertiaFromKa(SpindexerConstants.SPINDEXER_KA, SPINDEXER_GEARBOX);
+  public static final double SPINDEXER_FRICTION_VOLTS = SpindexerConstants.SPINDEXER_KS;
 
   // ---------------------------------------------------------------------------------------------
   // Intake roller — 1 motor, torque-current FOC. No SysId kA exists for this one.
   // ESTIMATE: two ~2" OD roller tubes at 0.64 lb each (CAD) ≈ 1.7e-4 kg·m² each, plus pulleys.
-  // Kraken X60 (the team confirmed it on 2026-10-16; the CAD also has a stray X44 in the same
-  // spot). The code collects at 145 rps, which is past an X60's free speed, so in sim the roller
-  // runs flat out at ~105 rps on the 13.5 V sim battery.
+  // Motor type ESTIMATE: X60 (a Kraken X60 sits near the intake in the CAD tree).
   // ---------------------------------------------------------------------------------------------
   public static final DCMotor INTAKE_ROLLER_GEARBOX = DCMotor.getKrakenX60Foc(1);
   public static final double INTAKE_ROLLER_J_KG_M2 = 4.0e-4;
@@ -142,7 +138,7 @@ public final class MechanismSimConstants {
    * with its lowest point (the bottom scoop) 2.3" up; another 5.5° down puts that at 1.5".
    * Physical angle convention: 0° = arm pointing straight forward, + = rotating up/back.
    */
-  public static final double INTAKE_REF_POSITION_ROT = IntakeWristConstants.INTAKE_MAX;
+  public static final double INTAKE_REF_POSITION_ROT = IntakeConstants.INTAKE_MAX;
   public static final double INTAKE_REF_ANGLE_RAD = Math.toRadians(-2.0 - 5.5);
   /** Angle of the arm as drawn in the CAD (used to rotate exported CAD models). */
   public static final double INTAKE_CAD_ANGLE_RAD = Math.toRadians(-2.0);
@@ -151,11 +147,11 @@ public final class MechanismSimConstants {
   public static final double INTAKE_ARM_RAD_PER_MECH_RAD = 1.0;
 
   /** Hard stops, expressed in code units (mechanism rotations) with a little margin. */
-  public static final double INTAKE_HARD_STOP_DOWN_ROT = IntakeWristConstants.INTAKE_MAX - 0.01;
-  public static final double INTAKE_HARD_STOP_UP_ROT = IntakeWristConstants.INTAKE_MIN + 0.01;
+  public static final double INTAKE_HARD_STOP_DOWN_ROT = IntakeConstants.INTAKE_MAX - 0.01;
+  public static final double INTAKE_HARD_STOP_UP_ROT = IntakeConstants.INTAKE_MIN + 0.01;
 
   /** Robots start a match stowed, so the sim starts with the intake up. */
-  public static final double INTAKE_START_ROT = IntakeWristConstants.INTAKE_MIN;
+  public static final double INTAKE_START_ROT = IntakeConstants.INTAKE_MIN;
 
   // ---------------------------------------------------------------------------------------------
   // Shooter hood — the INNER body of the shooter: two narrow truss links that ride on the 4"
@@ -188,7 +184,7 @@ public final class MechanismSimConstants {
    * pointing straight forward, + = front end rising.
    */
   public static final double HOOD_CAD_ANGLE_RAD = Math.toRadians(22.1);
-  public static final double HOOD_REF_POSITION_ROT = ShooterHoodConstants.SHOOTER_HOOD_DEFAULT;
+  public static final double HOOD_REF_POSITION_ROT = ShooterConstants.SHOOTER_HOOD_DEFAULT;
   public static final double HOOD_REF_ANGLE_RAD = HOOD_CAD_ANGLE_RAD;
 
   /**
@@ -201,23 +197,10 @@ public final class MechanismSimConstants {
    */
   public static final double HOOD_ARM_RAD_PER_MECH_RAD = 24.0 / 46.0;
 
-  /**
-   * Motor turns per hood turn, from the CAD gear train: Kraken X44 (no gearbox) → 12t:48t (20DP)
-   * → 10t pinion on the 190t (10DP) sectors = 4 × 19 = 76. The code's ROTOR_TO_SENSOR_RATIO of 60
-   * implies 60 × 46/24 = 115 and matches the old turret-era shooter (12:48, then 10:150); with
-   * that, the sim hood moved ~1.5× slower and stiffer than the real one. The physics uses 76; the
-   * rotor sensor is still written at the code's 60 so the TalonFX reads its sensors as configured.
-   */
-  public static final double HOOD_ROTOR_PER_ARM_ROT = (48.0 / 12.0) * (190.0 / 10.0);
-
-  /**
-   * Hard stops in code units. SHOOTER_HOOD_DEFAULT (0.0) is the resting position. Up: the CAD's
-   * sector teeth leave the pinion ~20-22° of travel above rest = ~0.11 code rotations (the
-   * software max of 0.15 would be 28°). The shot table tops out near 0.085.
-   */
-  public static final double HOOD_HARD_STOP_DOWN_ROT = ShooterHoodConstants.SHOOTER_HOOD_DEFAULT;
-  public static final double HOOD_HARD_STOP_UP_ROT = 0.11;
-  public static final double HOOD_START_ROT = ShooterHoodConstants.SHOOTER_HOOD_DEFAULT;
+  /** Hard stops in code units. SHOOTER_HOOD_DEFAULT (0.0) is the resting position. */
+  public static final double HOOD_HARD_STOP_DOWN_ROT = ShooterConstants.SHOOTER_HOOD_DEFAULT;
+  public static final double HOOD_HARD_STOP_UP_ROT = ShooterConstants.SHOOTER_HOOD_MAX + 0.01;
+  public static final double HOOD_START_ROT = ShooterConstants.SHOOTER_HOOD_DEFAULT;
 
   // ---------------------------------------------------------------------------------------------
   // Hopper extension — an outer box (side walls + front wall) that slides forward over the intake.
@@ -289,30 +272,19 @@ public final class MechanismSimConstants {
 
   // ---------------------------------------------------------------------------------------------
   // Shots. Instead of guessing ball physics, the launch model is fit to the real robot's tuned
-  // shot table (ShootingConstants SHOOTER_SPEEDS / HOOD_ANGLES / SHOOTER_TOF, the April 4
-  // NewShooterTesting shooter): for each row, the launch speed and angle that put the ball at the
-  // 1.83 m hub opening, d - 0.20 m from the launcher, after exactly the table's time of flight,
-  // using MapleSim's projectile gravity (11 m/s², no drag), with the setpoints the code actually
-  // commands (table rps + SHOOTER_EXTRA_RPS, table hood + HOOD_SHOT_OFFSET_ROTATIONS). Fit error is
-  // within 3% speed and 0.6° angle. So with the flywheel and hood where the code commands them, the
-  // sim scores, and it misses when they aren't settled yet.
-  //
-  // The 2026-ROBOT-SOTM-REWRITE values (0.0986, 58.81, -50.37) fit the older 62-89 rps turret-era
-  // shooter; with this table they fall ~3 m short. The table's TOFs are provisional, so the angle
-  // terms are only loosely pinned: TOF-free fits with slopes from -540 to +180 °/rot also score.
-  // The CAD hood gearing (46t:24t) predicts about -188 °/rot and 68°, consistent with this fit.
+  // shot table (ShotConstants SHOOTER_SPEEDS / HOOD_ANGLES / SHOOTER_TOF): for each row, the launch
+  // speed and angle that put the ball at the 1.83 m hub opening, d meters away, after exactly the
+  // table's time of flight, using MapleSim's projectile gravity (11 m/s², no drag). Fit error is
+  // ≤1.2° and every table row arrives within 0.11 m of the opening height. So with the flywheel and
+  // hood where the table says, the sim scores, and it misses when they aren't settled yet.
   // ---------------------------------------------------------------------------------------------
 
-  /**
-   * Ball exit speed (m/s) per flywheel rotor rps. Every table row gives 0.214-0.226, which is ~92%
-   * of the 4" wheel's surface speed at the CAD's 0.75 wheel turns per rotor turn. That's high for
-   * one wheel; the hood's driven upper rollers likely add to it.
-   */
-  public static final double SHOT_SPEED_MPS_PER_FLYWHEEL_RPS = 0.220;
+  /** Ball exit speed (m/s) per flywheel rotor rps. Every table row gives 0.097-0.100. */
+  public static final double SHOT_SPEED_MPS_PER_FLYWHEEL_RPS = 0.0986;
 
   /** Launch angle above horizontal = intercept + slope × hood position (code rotations). */
-  public static final double SHOT_ANGLE_INTERCEPT_DEG = 65.5;
-  public static final double SHOT_ANGLE_DEG_PER_HOOD_ROT = -131.5;
+  public static final double SHOT_ANGLE_INTERCEPT_DEG = 58.81;
+  public static final double SHOT_ANGLE_DEG_PER_HOOD_ROT = -50.37;
 
   /** Where the ball leaves the robot: behind center (matches ShotCalculator's launcher offset). */
   public static final double SHOT_EXIT_BEHIND_CENTER_M = 0.20;
@@ -372,16 +344,6 @@ public final class MechanismSimConstants {
   /** Velocity kept per physics substep (4 per loop); a little damping so piles settle. */
   public static final double HOPPER_DAMPING = 0.995;
 
-  /**
-   * Speed caps for loose hopper balls (m/s). The solver turns every overlap push into velocity
-   * (distance pushed / 5 ms substep), so a squeezed pile used to fire balls out at 10-30 m/s and up
-   * to 14 m high. The floor's rim moves ~2.2 m/s at the shooting speed, so nothing in the hopper
-   * should move faster than that, and the only thing that lifts a ball is the pile pushing it up.
-   * Measured with 8-65 balls and spindexer 40-120 rps: the feed rate is unchanged.
-   */
-  public static final double HOPPER_MAX_SPEED_MPS = 2.5;
-  public static final double HOPPER_MAX_RISE_MPS = 0.8;
-
   /** The feeder's funnel: balls whose centers get within this of its entrance (horizontally). */
   public static final double FEEDER_CAPTURE_RADIUS_M = 0.12;
 
@@ -403,9 +365,8 @@ public final class MechanismSimConstants {
   public static final double FEEDER_BALL_M_PER_ROTOR_REV = 1.4 / 110.0;
 
   /**
-   * ESTIMATE: spinning-floor revolutions per spindexer rotor revolution. 1.8 rev/s at the usual
-   * 80 rps (~2.2 m/s at the rim), a little faster than the feeder can take balls so the feeder sets
-   * the fire rate.
+   * ESTIMATE: spinning-floor revolutions per spindexer rotor revolution. ~1.25 rev/s at the usual
+   * 80 rps, a little faster than the feeder can take balls so the feeder sets the fire rate.
    */
   public static final double SPINDEXER_REV_PER_ROTOR_REV = 1.8 / 80.0;
 

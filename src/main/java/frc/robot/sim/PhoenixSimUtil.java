@@ -4,8 +4,13 @@
 
 package frc.robot.sim;
 
+import static edu.wpi.first.units.Units.KilogramSquareMeters;
+import static edu.wpi.first.units.Units.Volts;
+
+import com.ctre.phoenix6.configs.Slot0Configs;
 import com.ctre.phoenix6.hardware.CANcoder;
 import com.ctre.phoenix6.hardware.TalonFX;
+import com.ctre.phoenix6.signals.StaticFeedforwardSignValue;
 import com.ctre.phoenix6.sim.CANcoderSimState;
 import com.ctre.phoenix6.sim.TalonFXSimState;
 import com.ctre.phoenix6.swerve.SwerveModuleConstants;
@@ -32,27 +37,12 @@ public final class PhoenixSimUtil {
   private PhoenixSimUtil() {}
 
   /**
-   * Strips the real-robot calibration the MapleSim ↔ Phoenix 6 bridge can't represent.
+   * Strips real-robot calibration that breaks the MapleSim ↔ Phoenix 6 sim loop.
    *
-   * <p>The simulated wheels start at a known zero pose, and the adapters below push MapleSim's
-   * raw rotor and CANcoder positions with no encoder offset and no motor or encoder inversion.
-   * Keeping the robot's CANcoder offsets and inversion flags makes the steer PID chase a phantom
-   * error, which shows up as the chassis sitting in place and vibrating.
-   *
-   * <p>The coupling ratio is zeroed too. On the robot, steering turns the drive wheel through the
-   * module gears (4.5 drive rotor turns per azimuth turn) and Phoenix backs that out of odometry
-   * and adds it to drive requests. MapleSim has no such coupling, so in sim the compensation read
-   * every steer move as wheel speed (~0.5 m/s for an X-lock) and drove the wheels to match. The
-   * stationary X-lock then saw the robot "moving", let go, re-aimed and locked again every
-   * ~0.15 s, spinning the wheels while the robot sat still. With no coupling on either side, sim
-   * nets out the same as the robot.
-   *
-   * <p>Everything else runs exactly as on the robot: steer gains, Voltage closed loop, 12.1:1,
-   * FusedCANcoder, drive gains. Headless step tests showed the sim-only steer overrides this
-   * used to apply (kP 70, kD 4.5, kV 1.91, 16:1) only made up for a too-heavy MapleSim steer
-   * inertia (see {@code Swerve.initMapleSim}); the 16:1 ratio had no measurable effect, and the
-   * friction/inertia overrides only feed CTRE's SimSwerveDrivetrain, which this project never
-   * steps.
+   * <p>The simulated wheels start at a known zero pose with no encoder offset and no motor
+   * inversion. Real-robot CANcoder offsets and motor/encoder inversion flags cause the steer
+   * PID to chase a phantom error in sim, which manifests as the chassis sitting in place and
+   * vibrating. Calling this on each module's constants before construction fixes that.
    *
    * <p>No-op on the real robot. Mutates and returns the same instance.
    */
@@ -64,7 +54,19 @@ public final class PhoenixSimUtil {
         .withDriveMotorInverted(false)
         .withSteerMotorInverted(false)
         .withEncoderInverted(false)
-        .withCouplingGearRatio(0);
+        .withSteerMotorGains(
+            new Slot0Configs()
+                .withKP(70)
+                .withKI(0)
+                .withKD(4.5)
+                .withKS(0)
+                .withKV(1.91)
+                .withKA(0)
+                .withStaticFeedforwardSign(StaticFeedforwardSignValue.UseClosedLoopSign))
+        .withSteerMotorGearRatio(16.0)
+        .withDriveFrictionVoltage(Volts.of(0.1))
+        .withSteerFrictionVoltage(Volts.of(0.05))
+        .withSteerInertia(KilogramSquareMeters.of(0.05));
   }
 
   public static class TalonFXMotorControllerSim implements SimulatedMotorController {

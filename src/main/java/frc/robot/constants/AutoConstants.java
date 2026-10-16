@@ -2,48 +2,11 @@ package frc.robot.constants;
 
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.math.util.Units;
-import frc.powerlib.configs.CompletionCriteria;
-import frc.powerlib.configs.CrossTrackConfig;
-import frc.powerlib.configs.WaypointHandoffConfig;
 
 public class AutoConstants {
-  // Provisional command limits; validate on the robot before increasing.
-  public static final double MAX_TRANSLATION_ACCELERATION_METERS_PER_SECOND_SQUARED = 3.0;
-  public static final double MAX_ANGULAR_ACCELERATION_RADIANS_PER_SECOND_SQUARED = 2 * Math.PI;
-
-  // Provisional measured arrival thresholds; validate settling and route timing on the robot.
-  public static final double MAX_ARRIVAL_TRANSLATION_SPEED_METERS_PER_SECOND = 0.05;
-  public static final double MAX_ARRIVAL_ANGULAR_SPEED_RADIANS_PER_SECOND = Math.toRadians(5);
-  public static final double ARRIVAL_SETTLE_TIME_SECONDS = 0.1;
-
-  // Provisional crossing bounds; validate at real autonomous speeds and with vision corrections.
-  public static final double HANDOFF_MAX_OVERSHOOT_METERS = 0.25;
-  public static final double HANDOFF_MAX_SAMPLE_TRAVEL_METERS = 0.5;
-
-  public static WaypointHandoffConfig waypointHandoff() {
-    return new WaypointHandoffConfig(true, HANDOFF_MAX_OVERSHOOT_METERS, HANDOFF_MAX_SAMPLE_TRAVEL_METERS);
-  }
-
-  // Provisional lateral correction settings; tune recovery and corner behavior on the robot.
-  public static final double CROSS_TRACK_GAIN_PER_SECOND = 1.5;
-  public static final double CROSS_TRACK_MAX_CORRECTION_SPEED_METERS_PER_SECOND = 0.75;
-
-  public static CrossTrackConfig crossTrack() {
-    return new CrossTrackConfig(CROSS_TRACK_GAIN_PER_SECOND, CROSS_TRACK_MAX_CORRECTION_SPEED_METERS_PER_SECOND);
-  }
-
-  public static CompletionCriteria completionCriteria(double translationToleranceInches, double headingToleranceDegrees) {
-    return new CompletionCriteria(Units.inchesToMeters(translationToleranceInches), Math.toRadians(headingToleranceDegrees),
-        MAX_ARRIVAL_TRANSLATION_SPEED_METERS_PER_SECOND, MAX_ARRIVAL_ANGULAR_SPEED_RADIANS_PER_SECOND,
-        ARRIVAL_SETTLE_TIME_SECONDS);
-  }
-
-  @frc.powerlib.tuning.TunableConstant
-  public static volatile double TRANSLATION_TOLERANCE = 0.05;
-  @frc.powerlib.tuning.TunableConstant
-  public static volatile double ROTATION_TOLERANCE = 1.0;
-
+  public static final double TRANSLATION_TOLERANCE = 0.05;
+  public static final double ROTATION_TOLERANCE = 1.0;
+  
   // ---- Red left (driver station left) ----
   public static final Pose2d RED_LEFT_1 = new Pose2d(13.5, 2.4, Rotation2d.fromDegrees(-90.0));
   public static final Pose2d RED_LEFT_2 = new Pose2d(10.0, 2.4, Rotation2d.fromDegrees(-90.0));
@@ -79,20 +42,4 @@ public class AutoConstants {
   public static final Pose2d BLUE_RIGHT_5 = new Pose2d(8.2, 3.5, Rotation2d.fromDegrees(90.0));
   public static final Pose2d BLUE_RIGHT_6 = new Pose2d(8.1, 2.4, Rotation2d.fromDegrees(90.0));
   public static final Pose2d BLUE_RIGHT_7 = new Pose2d(2.1, 2.4, Rotation2d.fromDegrees(-135.0));
-
-  // Per-leg settings from April 4 RobotContainer/SwerveDriveCommand.
-  public static final double[] LEG_TOLERANCE_INCHES = {6, 6, 12, 6, 6, 3, 3};
-  public static final double[] LEG_SPEED_COEFFICIENTS = {0.5, 1, 0.75, 0.75, 0.4, 0.75, 1};
-  public static final boolean[] LEG_LOCK_HEADING = {true, false, true, true, true, true, false};
-  @frc.powerlib.tuning.TunableConstant
-  public static volatile double LEG_HEADING_TOLERANCE_DEGREES = 10;
-  @frc.powerlib.tuning.TunableConstant
-  public static volatile double STATIC_FEEDFORWARD_THRESHOLD_INCHES = 3;
-  @frc.powerlib.tuning.TunableConstant
-  public static volatile double TURN_TOLERANCE_DEGREES = 3;
-  @frc.powerlib.tuning.TunableConstant
-  public static volatile double TURN_TIMEOUT_SECONDS = 1;
-  // POWERLIB CUSTOM CONSTANTS START - DO NOT DELETE
-
-  // POWERLIB CUSTOM CONSTANTS END - DO NOT DELETE
 }

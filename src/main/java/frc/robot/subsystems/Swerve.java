@@ -14,7 +14,6 @@ import com.pathplanner.lib.config.PIDConstants;
 import com.pathplanner.lib.config.RobotConfig;
 import com.pathplanner.lib.controllers.PPHolonomicDriveController;
 import edu.wpi.first.math.Matrix;
-import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -28,8 +27,6 @@ import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Subsystem;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
-import frc.powerlib.PowerRobotContainer;
-import frc.robot.constants.SwerveConstants;
 import frc.robot.constants.TunerConstants;
 import frc.robot.constants.TunerConstants.TunerSwerveDrivetrain;
 import frc.robot.sim.MechanismSimConstants;
@@ -54,37 +51,6 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
   /** Latest 3D sim pose from {@link #m_bumpSim}; flat until the first update. */
   private Pose3d m_simPose3d = Pose3d.kZero;
 
-  private static final String kTuningSubsystemName = "Swerve";
-  private final frc.powerlib.tuning.TuningCadence powerlibTuningCadence = new frc.powerlib.tuning.TuningCadence();
-  private static final double kDefaultMaxSpeedMetersPerSecond =
-      TunerConstants.kSpeedAt12Volts.in(MetersPerSecond);
-  private static final double kDefaultRequestMaxAngularRateRadiansPerSecond =
-      SwerveConstants.REQUEST_MAX_ANGULAR_RATE_RADIANS_PER_SECOND;
-  private static final double kDefaultDriveToPointMaxAngularRateRadiansPerSecond =
-      SwerveConstants.DRIVE_TO_POINT_MAX_ANGULAR_RATE_RADIANS_PER_SECOND;
-  private static final double kDefaultDriverMaxSpeedCoefficient =
-      SwerveConstants.DRIVER_MAX_SPEED_COEFFICIENT;
-  private static final double kDefaultDriverVelocityScale = SwerveConstants.DRIVER_VELOCITY_SCALE;
-  private static final double kDefaultDriverMaxAngularRateRadiansPerSecond =
-      SwerveConstants.DRIVER_MAX_ANGULAR_RATE_RADIANS_PER_SECOND;
-  private static final double kDefaultDriverJoystickDeadband =
-      SwerveConstants.DRIVER_JOYSTICK_DEADBAND;
-  private static final double kDefaultDriverSkewCompensation =
-      SwerveConstants.DRIVER_SKEW_COMPENSATION;
-  private static final double kDefaultDriveToPointMaxSpeedCoefficient =
-      SwerveConstants.DRIVE_TO_POINT_MAX_SPEED_COEFFICIENT;
-  private static final double kDefaultDriveToPointSlowSpeedCoefficient =
-      SwerveConstants.DRIVE_TO_POINT_SLOW_SPEED_COEFFICIENT;
-  private static final double kDefaultDriveToPointStaticFrictionConstant =
-      SwerveConstants.DRIVE_TO_POINT_STATIC_FRICTION_CONSTANT;
-  private static final double kDefaultTranslationDeadbandMetersPerSecond =
-      SwerveConstants.REQUEST_TRANSLATION_DEADBAND_METERS_PER_SECOND;
-  private static final double kDefaultRotationalDeadbandRadiansPerSecond =
-      SwerveConstants.REQUEST_ROTATIONAL_DEADBAND_RADIANS_PER_SECOND;
-  private static final double kDefaultHeadingKP = SwerveConstants.HEADING_KP;
-  private static final double kDefaultHeadingKI = SwerveConstants.HEADING_KI;
-  private static final double kDefaultHeadingKD = SwerveConstants.HEADING_KD;
-
   /* Blue alliance sees forward as 0 degrees (toward red alliance wall) */
   private static final Rotation2d kBlueAlliancePerspectiveRotation = Rotation2d.kZero;
   /* Red alliance sees forward as 180 degrees (toward blue alliance wall) */
@@ -100,26 +66,15 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
   private final SwerveRequest.SysIdSwerveRotation m_rotationCharacterization =
       new SwerveRequest.SysIdSwerveRotation();
 
-  private final PhoenixPIDController HEADING_CONTROLLER =
-      new PhoenixPIDController(kDefaultHeadingKP, kDefaultHeadingKI, kDefaultHeadingKD);
-  private final PIDController autonomousHeadingController =
-      new PIDController(kDefaultHeadingKP, kDefaultHeadingKI, kDefaultHeadingKD);
+  private final PhoenixPIDController HEADING_CONTROLLER = new PhoenixPIDController(6.5, 0, 0.25);
 
-  public double MAX_SPEED = kDefaultMaxSpeedMetersPerSecond;
-  public double MAX_ANGULAR_RATE = kDefaultRequestMaxAngularRateRadiansPerSecond;
+  public double MAX_SPEED = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond);
+  public double MAX_ANGULAR_RATE =
+      RotationsPerSecond.of(0.75)
+          .in(RadiansPerSecond); // 0.75 rotations per second in radians per second unit
   public double MAX_DRIVE_TO_POINT_ANGULAR_RATE =
-      kDefaultDriveToPointMaxAngularRateRadiansPerSecond;
-  private double driverMaxSpeedCoefficient = kDefaultDriverMaxSpeedCoefficient;
-  private double driverVelocityScale = kDefaultDriverVelocityScale;
-  private double driverMaxAngularRateRadiansPerSecond =
-      kDefaultDriverMaxAngularRateRadiansPerSecond;
-  private double driverJoystickDeadband = kDefaultDriverJoystickDeadband;
-  private double driverSkewCompensation = kDefaultDriverSkewCompensation;
-  private double translationDeadbandMetersPerSecond = kDefaultTranslationDeadbandMetersPerSecond;
-  private double rotationalDeadbandRadiansPerSecond = kDefaultRotationalDeadbandRadiansPerSecond;
-  private double headingKP = kDefaultHeadingKP;
-  private double headingKI = kDefaultHeadingKI;
-  private double headingKD = kDefaultHeadingKD;
+      RotationsPerSecond.of(0.75)
+          .in(RadiansPerSecond); // 0.75 rotations per second in radians per second unit
 
   public final SwerveRequest.FieldCentric FIELD_RELATIVE =
       new SwerveRequest.FieldCentric()
@@ -138,6 +93,27 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
           .withDeadband(MAX_SPEED * 0.1)
           .withRotationalDeadband(MAX_ANGULAR_RATE * 0.1)
           .withDriveRequestType(DriveRequestType.Velocity);
+
+  /**
+   * Like DRIVE_AT_ANGLE, for driver-controlled aiming while shooting (DriveMode.AIM). The joystick already has its
+   * own 10% deadband, and while shooting the stick is scaled down, so DRIVE_AT_ANGLE's 10%-of-max
+   * deadband would swallow most of the stick: the robot sat still and only turned (wheels in the
+   * turn-in-place "X"). This one only drops near-zero speeds.
+   */
+  public final SwerveRequest.FieldCentricFacingAngle AIM_AT_ANGLE =
+      new SwerveRequest.FieldCentricFacingAngle()
+          .withDeadband(AIM_TRANSLATION_DEADBAND_MPS)
+          .withRotationalDeadband(MAX_ANGULAR_RATE * 0.1)
+          .withHeadingPID(6.5, 0, 0.25)
+          .withDriveRequestType(DriveRequestType.Velocity);
+
+  /** Below this commanded speed (m/s) an aiming robot counts as stopped. */
+  public static final double AIM_TRANSLATION_DEADBAND_MPS = 0.02;
+
+  private final SwerveRequest.SwerveDriveBrake BRAKE = new SwerveRequest.SwerveDriveBrake();
+  /** Stopped with every wheel pointed straight ahead (robot-relative). */
+  private final SwerveRequest.PointWheelsAt WHEELS_STRAIGHT =
+      new SwerveRequest.PointWheelsAt().withModuleDirection(Rotation2d.kZero);
 
   /** Swerve request to apply during robot-centric path following */
   private final SwerveRequest.ApplyRobotSpeeds m_pathApplyRobotSpeeds =
@@ -175,7 +151,7 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
   private final SysIdRoutine m_sysIdRoutineRotation =
       new SysIdRoutine(
           new SysIdRoutine.Config(
-              /* This is in radians per second, but SysId only supports "volts per second" */
+              /* This is in radians per second², but SysId only supports "volts per second" */
               Volts.of(Math.PI / 6).per(Second),
               /* This is in radians per second, but SysId only supports "volts" */
               Volts.of(Math.PI),
@@ -210,7 +186,9 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     if (Utils.isSimulation()) {
       initMapleSim();
     }
-    configurePowerLibSwerve();
+    DRIVE_AT_ANGLE.HeadingController = HEADING_CONTROLLER;
+    DRIVE_AT_ANGLE.HeadingController.enableContinuousInput(-Math.PI, Math.PI);
+    configureAutoBuilder();
   }
 
   /**
@@ -232,7 +210,9 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     if (Utils.isSimulation()) {
       initMapleSim();
     }
-    configurePowerLibSwerve();
+    DRIVE_AT_ANGLE.HeadingController = HEADING_CONTROLLER;
+    DRIVE_AT_ANGLE.HeadingController.enableContinuousInput(-Math.PI, Math.PI);
+    configureAutoBuilder();
   }
 
   /**
@@ -245,9 +225,9 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
    * @param odometryUpdateFrequency The frequency to run the odometry loop. If unspecified or set to
    *     0 Hz, this is 250 Hz on CAN FD, and 100 Hz on CAN 2.0.
    * @param odometryStandardDeviation The standard deviation for odometry calculation in the form
-   *     [x, y, theta], with units in meters and radians
+   *     [x, y, theta]ᵀ, with units in meters and radians
    * @param visionStandardDeviation The standard deviation for vision calculation in the form [x, y,
-   *     theta], with units in meters and radians
+   *     theta]ᵀ, with units in meters and radians
    * @param modules Constants for each specific module
    */
   public Swerve(
@@ -265,12 +245,13 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     if (Utils.isSimulation()) {
       initMapleSim();
     }
-    configurePowerLibSwerve();
+    DRIVE_AT_ANGLE.HeadingController = HEADING_CONTROLLER;
+    DRIVE_AT_ANGLE.HeadingController.enableContinuousInput(-Math.PI, Math.PI);
+    configureAutoBuilder();
   }
 
-  /** No-op on real robot; in sim strips encoder offsets, inversions and the steer-drive
-   * coupling ratio so MapleSim can drive the wheels from a clean zero. Must be static because
-   * it runs in {@code super(...)}. */
+  /** No-op on real robot; in sim strips encoder offsets + inversions so MapleSim can drive
+   * the wheels from a clean zero. Must be static because it runs in {@code super(...)}. */
   private static SwerveModuleConstants<?, ?, ?>[] regulateModulesForSim(
       SwerveModuleConstants<?, ?, ?>[] modules) {
     if (!Utils.isSimulation()) return modules;
@@ -280,195 +261,8 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     return modules;
   }
 
-  private void configurePowerLibSwerve() {
-    registerTunableValues();
-    applyTunableValues();
-    DRIVE_AT_ANGLE.HeadingController = HEADING_CONTROLLER;
-    DRIVE_AT_ANGLE.HeadingController.enableContinuousInput(-Math.PI, Math.PI);
-    autonomousHeadingController.enableContinuousInput(-Math.PI, Math.PI);
-    configureAutoBuilder();
-  }
-
-  private void registerTunableValues() {
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName, "Driver/MaxSpeedCoefficient", kDefaultDriverMaxSpeedCoefficient);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName, "Driver/VelocityScale", kDefaultDriverVelocityScale);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName,
-        "Driver/MaxAngularRateRadiansPerSecond",
-        kDefaultDriverMaxAngularRateRadiansPerSecond);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName, "Driver/JoystickDeadband", kDefaultDriverJoystickDeadband);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName, "Driver/SkewCompensation", kDefaultDriverSkewCompensation);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName,
-        "Requests/MaxAngularRateRadiansPerSecond",
-        kDefaultRequestMaxAngularRateRadiansPerSecond);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName,
-        "Requests/TranslationDeadbandMetersPerSecond",
-        kDefaultTranslationDeadbandMetersPerSecond);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName,
-        "Requests/RotationalDeadbandRadiansPerSecond",
-        kDefaultRotationalDeadbandRadiansPerSecond);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName,
-        "DriveToPoint/MaxAngularRateRadiansPerSecond",
-        kDefaultDriveToPointMaxAngularRateRadiansPerSecond);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName,
-        "DriveToPoint/MaxSpeedCoefficient",
-        kDefaultDriveToPointMaxSpeedCoefficient);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName,
-        "DriveToPoint/SlowSpeedCoefficient",
-        kDefaultDriveToPointSlowSpeedCoefficient);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName,
-        "DriveToPoint/StaticFrictionConstant",
-        kDefaultDriveToPointStaticFrictionConstant);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName, "Heading/kP", kDefaultHeadingKP);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName, "Heading/kI", kDefaultHeadingKI);
-    PowerRobotContainer.setSubsystemVariableDefault(
-        kTuningSubsystemName, "Heading/kD", kDefaultHeadingKD);
-  }
-
-  private void applyTunableValues() {
-    if (!PowerRobotContainer.isTuningEnabled() || !powerlibTuningCadence.isDue()) {
-      return;
-    }
-    frc.powerlib.utils.DriveUtil.syncTunableValues();
-    double nextDriverMaxSpeedCoefficient =
-        getSwerveVariable("Driver/MaxSpeedCoefficient", kDefaultDriverMaxSpeedCoefficient);
-    double nextDriverVelocityScale =
-        getSwerveVariable("Driver/VelocityScale", kDefaultDriverVelocityScale);
-    double nextDriverMaxAngularRateRadiansPerSecond =
-        getSwerveVariable(
-            "Driver/MaxAngularRateRadiansPerSecond",
-            kDefaultDriverMaxAngularRateRadiansPerSecond);
-    double nextDriverJoystickDeadband =
-        getSwerveVariable("Driver/JoystickDeadband", kDefaultDriverJoystickDeadband);
-    double nextDriverSkewCompensation =
-        getSwerveVariable("Driver/SkewCompensation", kDefaultDriverSkewCompensation);
-    double nextTranslationDeadbandMetersPerSecond =
-        getSwerveVariable(
-            "Requests/TranslationDeadbandMetersPerSecond",
-            kDefaultTranslationDeadbandMetersPerSecond);
-    double nextRotationalDeadbandRadiansPerSecond =
-        getSwerveVariable(
-            "Requests/RotationalDeadbandRadiansPerSecond",
-            kDefaultRotationalDeadbandRadiansPerSecond);
-    double nextDriveToPointMaxAngularRateRadiansPerSecond =
-        getSwerveVariable(
-            "DriveToPoint/MaxAngularRateRadiansPerSecond",
-            kDefaultDriveToPointMaxAngularRateRadiansPerSecond);
-    double nextHeadingKP = getSwerveVariable("Heading/kP", kDefaultHeadingKP);
-    double nextHeadingKI = getSwerveVariable("Heading/kI", kDefaultHeadingKI);
-    double nextHeadingKD = getSwerveVariable("Heading/kD", kDefaultHeadingKD);
-
-    driverMaxSpeedCoefficient = nextDriverMaxSpeedCoefficient;
-    driverVelocityScale = nextDriverVelocityScale;
-    driverMaxAngularRateRadiansPerSecond = nextDriverMaxAngularRateRadiansPerSecond;
-    driverJoystickDeadband = nextDriverJoystickDeadband;
-    driverSkewCompensation = nextDriverSkewCompensation;
-    MAX_ANGULAR_RATE = getSwerveVariable(
-        "Requests/MaxAngularRateRadiansPerSecond", kDefaultRequestMaxAngularRateRadiansPerSecond);
-
-    if (changed(nextTranslationDeadbandMetersPerSecond, translationDeadbandMetersPerSecond)
-        || changed(nextRotationalDeadbandRadiansPerSecond, rotationalDeadbandRadiansPerSecond)) {
-      translationDeadbandMetersPerSecond = nextTranslationDeadbandMetersPerSecond;
-      rotationalDeadbandRadiansPerSecond = nextRotationalDeadbandRadiansPerSecond;
-      applyRequestDeadbands();
-    }
-
-    if (changed(
-        nextDriveToPointMaxAngularRateRadiansPerSecond, MAX_DRIVE_TO_POINT_ANGULAR_RATE)) {
-      MAX_DRIVE_TO_POINT_ANGULAR_RATE = nextDriveToPointMaxAngularRateRadiansPerSecond;
-    }
-
-    if (changed(nextHeadingKP, headingKP)
-        || changed(nextHeadingKI, headingKI)
-        || changed(nextHeadingKD, headingKD)) {
-      headingKP = nextHeadingKP;
-      headingKI = nextHeadingKI;
-      headingKD = nextHeadingKD;
-      HEADING_CONTROLLER.setPID(headingKP, headingKI, headingKD);
-      autonomousHeadingController.setPID(headingKP, headingKI, headingKD);
-    }
-  }
-
-  private double getSwerveVariable(String key, double defaultValue) {
-    return PowerRobotContainer.getSubsystemVariable(kTuningSubsystemName, key, defaultValue);
-  }
-
-  private void applyRequestDeadbands() {
-    FIELD_RELATIVE
-        .withDeadband(translationDeadbandMetersPerSecond)
-        .withRotationalDeadband(rotationalDeadbandRadiansPerSecond);
-    ROBOT_RELATIVE
-        .withDeadband(translationDeadbandMetersPerSecond)
-        .withRotationalDeadband(rotationalDeadbandRadiansPerSecond);
-    DRIVE_AT_ANGLE
-        .withDeadband(translationDeadbandMetersPerSecond)
-        .withRotationalDeadband(rotationalDeadbandRadiansPerSecond);
-  }
-
-  private static boolean changed(double nextValue, double currentValue) {
-    return Math.abs(nextValue - currentValue) > 1e-9;
-  }
-
-  public double getDriverMaxSpeedCoefficient() {
-    return driverMaxSpeedCoefficient;
-  }
-
-  public double getDriverVelocityScale() {
-    return driverVelocityScale;
-  }
-
-  public double getDriverMaxAngularRateRadiansPerSecond() {
-    return driverMaxAngularRateRadiansPerSecond;
-  }
-
-  public double getDriverJoystickDeadband() {
-    return driverJoystickDeadband;
-  }
-
-  public double getDriverSkewCompensation() {
-    return driverSkewCompensation;
-  }
-
-  /** Reset autonomous heading history without disturbing manual facing-angle requests. */
-  public void resetAutonomousHeadingController() {
-    autonomousHeadingController.reset();
-  }
-
-  /** Unconstrained omega for the motion limiter, calculated on the 20 ms command loop. */
-  public double calculateAutonomousHeadingRate(Rotation2d currentHeading, Rotation2d targetHeading) {
-    return autonomousHeadingController.calculate(
-        currentHeading.getRadians(), targetHeading.getRadians());
-  }
-
-  private Double headingSetpointDegrees;
-
-  /** No target is reported while disabled or while SysId owns outputs in Test mode. */
-  public Double getHeadingSetpointDegrees() {
-    return DriverStation.isEnabled() && !DriverStation.isTest() ? headingSetpointDegrees : null;
-  }
-
   public void applyRequest(SwerveRequest request) {
-    applyRequest(request, null);
-  }
-
-  /** Track the heading target attached to this request; null clears it for manual rotation. */
-  public void applyRequest(SwerveRequest request, Double headingDegrees) {
     setControl(request);
-    headingSetpointDegrees = headingDegrees != null && Double.isFinite(headingDegrees)
-        ? headingDegrees : null;
   }
 
   public void drive(double x, double y, double rotation, DriveMode mode) {
@@ -489,7 +283,14 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
             DRIVE_AT_ANGLE
                 .withVelocityX(x)
                 .withVelocityY(y)
-                .withTargetDirection(Rotation2d.fromDegrees(rotation)), rotation);
+                .withTargetDirection(Rotation2d.fromDegrees(rotation)));
+        break;
+      case AIM:
+        applyRequest(
+            AIM_AT_ANGLE
+                .withVelocityX(x)
+                .withVelocityY(y)
+                .withTargetDirection(Rotation2d.fromDegrees(rotation)));
         break;
       case DRIVE_TO_POINT:
         applyRequest(
@@ -497,7 +298,13 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
                 .withVelocityX(x)
                 .withVelocityY(y)
                 .withTargetDirection(Rotation2d.fromDegrees(rotation))
-                .withMaxAbsRotationalRate(MAX_DRIVE_TO_POINT_ANGULAR_RATE), rotation);
+                .withMaxAbsRotationalRate(MAX_DRIVE_TO_POINT_ANGULAR_RATE));
+        break;
+      case BRAKE:
+        applyRequest(BRAKE);
+        break;
+      case WHEELS_STRAIGHT:
+        applyRequest(WHEELS_STRAIGHT);
         break;
     }
   }
@@ -526,8 +333,6 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
 
   @Override
   public void periodic() {
-    applyTunableValues();
-
     /*
      * Periodically try to apply the operator perspective.
      * If we haven't applied the operator perspective before, then we should apply it regardless of DS state.
@@ -546,9 +351,7 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
                 m_hasAppliedOperatorPerspective = true;
               });
     }
-
   }
-
 
   /**
    * Builds the MapleSim drivetrain and bridges its module/gyro state to Phoenix 6 sim states.
@@ -560,24 +363,17 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
    * loop from {@link #updateSimState()}.
    */
   private void initMapleSim() {
-    // Gear ratios, wheel radius, friction voltages and steer inertia mirror TunerConstants.
-    // Steer inertia is an ESTIMATE (CTRE's default; no published value for this module). It sets
-    // how fast the wheels turn under the robot's real steer gains: at 0.05 an 85° step overshot
-    // ~48° and took ~0.7 s to settle, at 0.01 ~32° and ~0.3 s. Match it to a logged robot step,
-    // but keep it >= 0.007: MapleSim's 4 ms integrator rings below that and diverges under 0.0033.
-    // Drive motors use the FOC model: Phoenix's module requests default to EnableFOC, and the
-    // robot runs Pro features (FusedCANcoder, FOC on every mechanism). kSpeedAt12Volts 5.72 m/s
-    // is the X60's FOC free speed. Steer stays on the plain model the inertia was tuned against.
+    // Gear ratios, wheel radius, and friction voltages mirror TunerConstants.
     SwerveModuleSimulationConfig moduleConfig =
         new SwerveModuleSimulationConfig(
-            DCMotor.getKrakenX60Foc(1),
+            DCMotor.getKrakenX60(1),
             DCMotor.getKrakenX60(1),
             5.4,
             12.1,
             Volts.of(0.2),
             Volts.of(0.2),
             Inches.of(2),
-            KilogramSquareMeters.of(0.01),
+            KilogramSquareMeters.of(0.05),
             COTS.WHEELS.COLSONS.cof);
 
     // Module translations match TunerConstants module positions (±11.5" × ±10.5").
@@ -600,12 +396,6 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     // Spawn on the blue side; Robot.simulationPeriodic moves it to the right alliance once the DS
     // reports one, and auto routines reset via resetPose().
     m_simDrivetrain = new SwerveDriveSimulation(driveConfig, MechanismSimConstants.BLUE_SPAWN_POSE);
-    // ESTIMATE. SwerveDriveSimulation hardcodes a 1.4 /s body drag (77 N per m/s at 55 kg), which
-    // held 1.5 m/s Velocity requests to 1.31 m/s on the robot's feedforward-only drive gains.
-    // 0.1 is MapleSim's base drivetrain default; a little keeps coasting speeds repeatable.
-    // Calibrate from one robot log at a steady cruise (applied drive volts V, speed v m/s):
-    // damping = ((V - 0.037) / v - 2.091) / 0.1656.
-    m_simDrivetrain.setLinearDamping(0.1);
     SimulatedArena.getInstance().addDriveTrainSimulation(m_simDrivetrain);
     m_bumpSim = new RobotBumpSim(moduleTranslations);
 
@@ -631,9 +421,9 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
   }
 
   /**
-   * Steps the bump sim against MapleSim's latest pose and, while on a ramp, hands its X back to
-   * MapleSim: gravity along the ramp plus the wheels' push, so a driven robot climbs and one
-   * that stops pushing short of the crest slides back. Call after {@code SimulatedArena.simulationPeriodic()} and before
+   * Steps the bump sim against MapleSim's latest pose and, while on a ramp, hands the
+   * frictionless-slide X back to MapleSim so the robot physically slides off a bump it can't
+   * crest. Call after {@code SimulatedArena.simulationPeriodic()} and before
    * {@link #syncOdometryFromSim()}.
    */
   public void updateBumpSim() {
@@ -723,7 +513,7 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
    * @param visionRobotPoseMeters The pose of the robot as measured by the vision camera.
    * @param timestampSeconds The timestamp of the vision measurement in seconds.
    * @param visionMeasurementStdDevs Standard deviations of the vision pose measurement in the form
-   *     [x, y, theta], with units in meters and radians.
+   *     [x, y, theta]ᵀ, with units in meters and radians.
    */
   @Override
   public void addVisionMeasurement(
@@ -739,7 +529,11 @@ public class Swerve extends TunerSwerveDrivetrain implements Subsystem {
     FIELD_RELATIVE,
     SYS_ID,
     ROTATION_LOCK,
-    DRIVE_TO_POINT
+    /** Driver aiming while shooting/passing: like ROTATION_LOCK with a near-zero deadband. */
+    AIM,
+    DRIVE_TO_POINT,
+    BRAKE,
+    WHEELS_STRAIGHT
   }
 
   public void configureAutoBuilder() {

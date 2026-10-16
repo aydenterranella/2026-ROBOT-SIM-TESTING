@@ -80,15 +80,6 @@ public class RollerMechanismSim {
 
     physics.setInputVoltage(appliedVolts - friction);
     physics.update(dtSeconds);
-    // Friction can stop the roller but never reverse it. Applied for a whole loop, it used to
-    // carry a coasting roller through zero and back every step (the intake roller sat flipping
-    // between ±0.9 rps once stopped). If it crossed zero without enough voltage to beat kS, it
-    // stuck at zero instead.
-    double after = physics.getAngularVelocityRadPerSec();
-    if (Math.abs(velocity) > 1e-3 && Math.signum(after) != Math.signum(velocity)
-        && Math.abs(appliedVolts) <= frictionVolts) {
-      physics.setState(physics.getAngularPositionRad(), 0.0);
-    }
 
     talonSim.setRawRotorPosition(physics.getAngularPositionRotations());
     talonSim.setRotorVelocity(
