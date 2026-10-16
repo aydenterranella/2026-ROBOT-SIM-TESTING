@@ -48,13 +48,11 @@ def deployArtifact = deploy.targets.roborio.artifacts.frcJava
 wpi.java.debugJni = false
 
 // Set this to true to enable desktop support.
-def includeDesktopSupport = true
+def includeDesktopSupport = false
 
 // Defining my dependencies. In this case, WPILib (+ friends), and vendor libraries.
 // Also defines JUnit 5.
 dependencies {
-    implementation("com.google.guava:guava:33.5.0-jre")
-    
     annotationProcessor wpi.java.deps.wpilibAnnotations()
     implementation wpi.java.deps.wpilib()
     implementation wpi.java.vendor.java()
@@ -75,15 +73,28 @@ dependencies {
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-
 }
 
 test {
     useJUnitPlatform()
     systemProperty 'junit.jupiter.extensions.autodetection.enabled', 'true'
-    // The sim tests share global state (HAL, NetworkTables, MapleSim's arena, sim clock), and a
-    // full Robot leaves notifiers behind that hang SimHooks.stepTiming. One JVM per test class.
+    // The HAL, NetworkTables, the MapleSim arena and PowerSubsystem's physics-sim switch are
+    // global, so each test class gets its own JVM.
     forkEvery = 1
+    // The autonomous routes run end to end in real time (~20 s each) and judge the robot code's
+    // autos rather than the sim, so a normal build skips them: run ./gradlew autoSim.
+    exclude 'frc/robot/sim/Auto*SimTest.class'
+}
+
+task autoSim(type: Test) {
+    description = 'Runs every autonomous route end to end in the MapleSim sim (real time, ~20 s each).'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    forkEvery = 1
+    include 'frc/robot/sim/Auto*SimTest.class'
+    outputs.upToDateWhen { false }
 }
 
 // Simulation configuration (e.g. environment variables).
@@ -106,6 +117,7 @@ jar {
 deployArtifact.jarTask = jar
 wpi.java.configureExecutableTasks(jar)
 wpi.java.configureTestTasks(test)
+wpi.java.configureTestTasks(autoSim)
 
 // Configure string concat to always inline compile
 tasks.withType(JavaCompile) {

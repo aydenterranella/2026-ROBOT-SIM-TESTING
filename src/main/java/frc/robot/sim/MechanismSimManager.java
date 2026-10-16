@@ -19,8 +19,8 @@ import edu.wpi.first.wpilibj.smartdashboard.MechanismLigament2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj.util.Color;
 import edu.wpi.first.wpilibj.util.Color8Bit;
-import frc.robot.constants.IntakeConstants;
-import frc.robot.constants.ShooterConstants;
+import frc.robot.constants.IntakeWristConstants;
+import frc.robot.constants.ShooterHoodConstants;
 import frc.robot.subsystems.StateMachine;
 import java.util.List;
 import org.ironmaple.simulation.drivesims.SwerveModuleSimulation;
@@ -106,7 +106,7 @@ public class MechanismSimManager {
         new ArmMechanismSim(
             new ArmMechanismSim.Config(
                 "IntakeWrist",
-                IntakeConstants.WRIST_CONFIG,
+                IntakeWristConstants.INTAKE_WRIST_CONFIG,
                 INTAKE_WRIST_GEARBOX,
                 INTAKE_WRIST_J_KG_M2,
                 INTAKE_ARM_LENGTH_M,
@@ -121,7 +121,7 @@ public class MechanismSimManager {
         new ArmMechanismSim(
             new ArmMechanismSim.Config(
                 "Hood",
-                ShooterConstants.HOOD_CONFIG,
+                ShooterHoodConstants.SHOOTER_HOOD_CONFIG,
                 HOOD_GEARBOX,
                 HOOD_J_KG_M2,
                 HOOD_ARM_LENGTH_M,
@@ -130,7 +130,8 @@ public class MechanismSimManager {
                 HOOD_ARM_RAD_PER_MECH_RAD,
                 HOOD_HARD_STOP_DOWN_ROT,
                 HOOD_HARD_STOP_UP_ROT,
-                HOOD_START_ROT),
+                HOOD_START_ROT,
+                HOOD_ROTOR_PER_ARM_ROT),
             sm.shooterHood.getPositionMotor());
 
     // ----- Side view -----
@@ -173,7 +174,7 @@ public class MechanismSimManager {
    */
   public boolean isIntakeDeployed() {
     return intakeWrist.getPositionRotations()
-        <= IntakeConstants.INTAKE_MAX + INTAKE_DEPLOYED_TOLERANCE_ROT;
+        <= IntakeWristConstants.INTAKE_MAX + INTAKE_DEPLOYED_TOLERANCE_ROT;
   }
 
   /** Simulated flywheel speed (rotor rps) — use this instead of the setpoint for realistic shots. */

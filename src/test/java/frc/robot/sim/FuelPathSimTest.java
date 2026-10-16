@@ -44,6 +44,22 @@ class FuelPathSimTest {
   }
 
   @Test
+  void squeezedPileStaysInTheHopperWhileFiring() {
+    // Overlap pushes used to turn into 10-30 m/s and launch balls metres above the robot.
+    FuelPathSim fuel = new FuelPathSim();
+    fuel.setCount(40);
+    double highest = 0;
+    int shots = 0;
+    for (int loop = 0; loop < 250; loop++) {
+      boolean firing = loop >= 50; // settle for a second, then fire for four
+      shots += fuel.update(firing ? SPINDEXER : 0, firing ? FEEDER : 0);
+      for (Pose3d ball : fuel.getPoses(new Pose3d())) highest = Math.max(highest, ball.getZ());
+    }
+    assertTrue(highest < 0.8, "a ball flew up to " + highest + " m");
+    assertTrue(shots >= 20, "the feed should keep up, fired " + shots + " in 4 s");
+  }
+
+  @Test
   void nothingFiresUnlessBothSpindexerAndFeederRun() {
     FuelPathSim fuel = new FuelPathSim();
     fuel.setCount(10);

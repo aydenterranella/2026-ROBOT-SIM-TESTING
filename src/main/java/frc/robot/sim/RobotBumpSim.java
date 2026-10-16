@@ -2,7 +2,8 @@
 // https://github.com/haar09/FRC-Rebuilt-BumpSim
 //
 // Vendored from upstream with local changes: package moved to frc.robot.sim, WHEEL_RADIUS
-// matched to our 2" wheels, and reset() / getSimXVelocity() added for the Swerve integration.
+// matched to our 2" wheels, reset() / getSimXVelocity() added for the Swerve integration, and
+// the drive's push kept on the ramp instead of a frictionless slide (see update()).
 //
 // MIT License
 //
@@ -49,14 +50,17 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
  *   <li>When any module first touches a bump's ascending face the sim enters <em>ramp mode</em>:
  *       it captures the robot's current field-X velocity ({@code simXVel}) and absolute field-X
  *       position ({@code simXPos}), then owns them for the duration of the crossing attempt.</li>
- *   <li>While on the ramp, only gravity acts along X (frictionless surface). If {@code simXVel}
- *       decays to zero before the peak the robot slides back to flat ground.</li>
+ *   <li>While on the ramp, gravity and the drive's push act along X. The push is whatever
+ *       MapleSim's wheel forces added since the last loop (local change; upstream was
+ *       frictionless). If {@code simXVel} decays to zero before the peak the robot slides back
+ *       to flat ground.</li>
  *   <li>The robot exits ramp mode when it either backs off (all module Z ≈ 0) or successfully
  *       crosses over the peak (modules come back to flat ground on the far side).</li>
  *   <li>A diagonal approach reduces effective deceleration via
  *       {@code contactFactor = |cos(2 * robotYaw)|}, making 45° crossings easier.</li>
  * </ul>
- * <p>Minimum crossing speed: {@code sqrt(2·g·h) ≈ sqrt(2·9.81·0.165) ≈ 1.80 m/s}.
+ * <p>Minimum crossing speed when coasting: {@code sqrt(2·g·h) ≈ sqrt(2·9.81·0.165) ≈ 1.80 m/s}.
+ * A driven robot climbs at any speed its wheels can hold.
  *
  * <h2>Quick-start integration with MapleSim</h2>
  * <pre>{@code
@@ -322,6 +326,12 @@ public class RobotBumpSim {
     public Pose3d update(Pose2d robotPose2d, ChassisSpeeds fieldRelativeSpeeds, int subticks) {
         double vx = fieldRelativeSpeeds.vxMetersPerSecond;
         double dt = PERIOD / subticks;
+        // Local change: MapleSim keeps applying wheel forces while this sim owns X, so whatever it
+        // added since we last handed it simXVel is the drive's push. Real wheels keep traction on
+        // the ramp; upstream treated it as frictionless, so a driven robot crawled over on momentum
+        // alone (and anything under ~1.8 m/s slid back). A coasting robot adds nothing and behaves
+        // exactly as upstream.
+        double driveAccelX = onRamp ? (vx - simXVel) / PERIOD : 0.0;
 
         // contactFactor reduces effective gravity deceleration for diagonal crossings.
         //   yaw = 0°  -> |cos(0)|    = 1.0  -> full deceleration (straight-on, hardest to cross)
@@ -376,9 +386,9 @@ public class RobotBumpSim {
                     simXPos = robotPose2d.getX();
                     simXVel = vx;
                 }
-                // Apply average gravity-along-ramp deceleration (frictionless surface)
+                // Apply average gravity-along-ramp deceleration plus the drive's push
                 double avgGravAccelX = (gravAccelXSum / contactCount) * contactFactor;
-                simXVel += avgGravAccelX * dt;
+                simXVel += (avgGravAccelX + driveAccelX) * dt;
                 simXPos += simXVel * dt;
             } else if (onRamp) {
                 // No ramp contact; check if all modules have settled onto flat ground

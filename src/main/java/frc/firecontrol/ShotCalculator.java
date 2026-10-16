@@ -15,7 +15,13 @@
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 
 package frc.firecontrol;
@@ -24,7 +30,6 @@ import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
-import edu.wpi.first.math.geometry.Twist2d;
 import edu.wpi.first.math.interpolation.InterpolatingDoubleTreeMap;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 
@@ -60,12 +65,13 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
  *   );
  *   ShotCalculator.LaunchParameters result = calc.calculate(inputs);
  *   if (result.isValid() &amp;&amp; result.confidence() &gt; 50) {
- *       shooter.setRPM(result.rpm());
+ *       shooter.setRPS(result.shooterRps());
  *       drivebase.setHeading(result.driveAngle());
  *   }
  * </pre>
  */
 public class ShotCalculator {
+  // Adapted from aydenterranella/2026-ROBOT-SIM-TESTING at e2bfadbd89e17429873ec029ce2a8b123377f4ec.
 
   /** The result of calculate(). Shooter RPS, time of flight, heading to aim at, and a 0-100 confidence score. */
   public record LaunchParameters(
@@ -186,11 +192,6 @@ public class ShotCalculator {
   private double previousTOF = -1;
   private double previousSpeed = 0;
 
-  // Previous-cycle velocities for acceleration estimation
-  private double prevRobotVx = 0;
-  private double prevRobotVy = 0;
-  private double prevRobotOmega = 0;
-
   public ShotCalculator(Config config) {
     this.config = config;
   }
@@ -202,6 +203,8 @@ public class ShotCalculator {
 
   /** Add a distance/RPM/TOF point to the lookup table. Use ProjectileSimulator to generate these, or hand-tune. */
   public void loadLUTEntry(double distanceM, double rpm, double tof) {
+    if (!Double.isFinite(distanceM) || distanceM <= 0 || !Double.isFinite(rpm) || rpm <= 0
+        || !Double.isFinite(tof) || tof <= 0) throw new IllegalArgumentException("Invalid shot LUT entry");
     rpmMap.put(distanceM, rpm);
     tofMap.put(distanceM, tof);
   }
@@ -242,13 +245,20 @@ public class ShotCalculator {
    */
   public LaunchParameters calculate(ShotInputs inputs) {
     if (inputs == null || inputs.robotPose() == null
-        || inputs.fieldVelocity() == null || inputs.robotVelocity() == null) {
+        || inputs.fieldVelocity() == null || inputs.robotVelocity() == null
+        || inputs.hubCenter() == null || inputs.hubForward() == null || !validConfig()
+        || (shotLUT == null ? rpmMap.get(1.0) == null || tofMap.get(1.0) == null : shotLUT.size() == 0)
+        || !finite(inputs.robotPose().getRotation().getRadians(),
+            inputs.fieldVelocity().vxMetersPerSecond, inputs.fieldVelocity().vyMetersPerSecond,
+            inputs.fieldVelocity().omegaRadiansPerSecond, inputs.robotVelocity().vxMetersPerSecond,
+            inputs.robotVelocity().vyMetersPerSecond, inputs.robotVelocity().omegaRadiansPerSecond,
+            inputs.hubCenter().getX(), inputs.hubCenter().getY(), inputs.hubForward().getX(),
+            inputs.hubForward().getY(), inputs.pitchDeg(), inputs.rollDeg(), inputs.visionConfidence())) {
       return LaunchParameters.INVALID;
     }
 
     Pose2d rawPose = inputs.robotPose();
     ChassisSpeeds fieldVel = inputs.fieldVelocity();
-    ChassisSpeeds robotVel = inputs.robotVelocity();
 
     double poseX = rawPose.getX();
     double poseY = rawPose.getY();
@@ -257,22 +267,14 @@ public class ShotCalculator {
       return LaunchParameters.INVALID;
     }
 
-    // Second-order pose prediction. Instead of just v*dt, we use v*dt + 0.5*a*dt^2
-    // where acceleration is estimated from the velocity delta between this cycle and last.
-    // This tracks better through turns and speed changes because it catches the curvature.
-    double dt = config.phaseDelayMs / 1000.0;
-    double ax = (robotVel.vxMetersPerSecond - prevRobotVx) / 0.02;
-    double ay = (robotVel.vyMetersPerSecond - prevRobotVy) / 0.02;
-    double aOmega = (robotVel.omegaRadiansPerSecond - prevRobotOmega) / 0.02;
+    // First-order pose prediction through the release latency. Phoenix supplies a current
+    // pose; the adapter sets phaseDelayMs to zero. Acceleration is not estimated: differencing
+    // measured velocity each loop roughly tripled velocity noise in the aim heading.
+    double dt = (config.phaseDelayMs + config.mechLatencyMs) / 1000.0;
     Pose2d compensatedPose =
-        rawPose.exp(
-            new Twist2d(
-                robotVel.vxMetersPerSecond * dt + 0.5 * ax * dt * dt,
-                robotVel.vyMetersPerSecond * dt + 0.5 * ay * dt * dt,
-                robotVel.omegaRadiansPerSecond * dt + 0.5 * aOmega * dt * dt));
-    prevRobotVx = robotVel.vxMetersPerSecond;
-    prevRobotVy = robotVel.vyMetersPerSecond;
-    prevRobotOmega = robotVel.omegaRadiansPerSecond;
+        new Pose2d(poseX + fieldVel.vxMetersPerSecond * dt,
+            poseY + fieldVel.vyMetersPerSecond * dt,
+            rawPose.getRotation().plus(new Rotation2d(fieldVel.omegaRadiansPerSecond * dt)));
 
     double robotX = compensatedPose.getX();
     double robotY = compensatedPose.getY();
@@ -317,7 +319,7 @@ public class ShotCalculator {
     double ry = hubY - launcherY;
     double distance = Math.hypot(rx, ry);
 
-    if (distance < config.minScoringDistance || distance > config.maxScoringDistance) {
+    if (distance < config.minScoringDistance - 1e-9 || distance > config.maxScoringDistance + 1e-9) {
       return LaunchParameters.INVALID;
     }
 
@@ -414,10 +416,23 @@ public class ShotCalculator {
       solvedTOF = tof;
     }
 
+    // Recompute at the final iterate. The reference used a stale projected distance
+    // and marked unconverged/clamped solutions valid.
+    double drift = velocityFiltered ? 0 : dragCompensatedTOF(solvedTOF);
+    double finalRx = rx - vx * drift;
+    double finalRy = ry - vy * drift;
+    projDist = Math.hypot(finalRx, finalRy);
+    if (!finite(solvedTOF, projDist) || solvedTOF < config.tofMin || solvedTOF > config.tofMax
+        || projDist < config.minScoringDistance - 1e-9 || projDist > config.maxScoringDistance + 1e-9
+        || (shotLUT != null && !shotLUT.containsDistance(projDist))
+        || Math.abs(effectiveTOF(projDist) - solvedTOF) > config.convergenceTolerance) {
+      previousTOF = -1;
+      return LaunchParameters.INVALID;
+    }
     // Save for next cycle's warm start
     previousTOF = solvedTOF;
 
-    double effectiveTOF = solvedTOF + config.mechLatencyMs / 1000.0;
+    double effectiveTOF = solvedTOF;
 
     // RPM from LUT at solved distance
     double effectiveShooterRps = effectiveRPM(projDist);
@@ -433,11 +448,11 @@ public class ShotCalculator {
       compTargetX = hubX - vx * headingDriftTOF;
       compTargetY = hubY - vy * headingDriftTOF;
     }
-    double aimX = compTargetX - robotX;
-    double aimY = compTargetY - robotY;
+    double aimX = compTargetX - launcherX;
+    double aimY = compTargetY - launcherY;
     Rotation2d driveAngle = new Rotation2d(aimX, aimY);
     if (config.shooterAngleOffsetRad != 0.0) {
-      driveAngle = driveAngle.plus(new Rotation2d(config.shooterAngleOffsetRad));
+      driveAngle = driveAngle.minus(new Rotation2d(config.shooterAngleOffsetRad));
     }
 
     // Heading error for confidence calculation
@@ -447,8 +462,7 @@ public class ShotCalculator {
     double driveAngularVelocity = 0;
     if (!velocityFiltered && distance > 0.1) {
       // tangential velocity / distance gives angular rate
-      double tangentialVel = (ry * vx - rx * vy) / distance;
-      driveAngularVelocity = tangentialVel / distance;
+      driveAngularVelocity = (finalRy * vx - finalRx * vy) / (projDist * projDist);
     }
 
     // Solver convergence quality
@@ -471,6 +485,9 @@ public class ShotCalculator {
         solverQuality, robotSpeed, headingErrorRad, distance, inputs.visionConfidence());
 
     previousSpeed = robotSpeed;
+    if (!finite(effectiveShooterRps, confidence, driveAngle.getRadians(), driveAngularVelocity)) {
+      return LaunchParameters.INVALID;
+    }
 
     return new LaunchParameters(
         effectiveShooterRps,
@@ -479,7 +496,7 @@ public class ShotCalculator {
         driveAngularVelocity,
         true,
         confidence,
-        distance,
+        projDist,
         iterationsUsed,
         warmStartUsed);
   }
@@ -588,9 +605,6 @@ public class ShotCalculator {
   public void resetWarmStart() {
     previousTOF = -1;
     previousSpeed = 0;
-    prevRobotVx = 0;
-    prevRobotVy = 0;
-    prevRobotOmega = 0;
   }
 
   /**
@@ -619,5 +633,23 @@ public class ShotCalculator {
 
   InterpolatingDoubleTreeMap getTofMap() {
     return tofMap;
+  }
+
+  private static boolean finite(double... values) {
+    for (double value : values) if (!Double.isFinite(value)) return false;
+    return true;
+  }
+
+  private boolean validConfig() {
+    return config != null && finite(config.launcherOffsetX, config.launcherOffsetY,
+        config.minScoringDistance, config.maxScoringDistance, config.convergenceTolerance,
+        config.tofMin, config.tofMax, config.minSOTMSpeed, config.maxSOTMSpeed,
+        config.phaseDelayMs, config.mechLatencyMs, config.sotmDragCoeff,
+        config.shooterAngleOffsetRad, config.maxTiltDeg)
+        && config.minScoringDistance > 0 && config.maxScoringDistance > config.minScoringDistance
+        && config.maxIterations > 0 && config.convergenceTolerance > 0 && config.tofMin > 0
+        && config.tofMax > config.tofMin && config.minSOTMSpeed >= 0
+        && config.maxSOTMSpeed > config.minSOTMSpeed && config.phaseDelayMs >= 0
+        && config.mechLatencyMs >= 0 && config.sotmDragCoeff >= 0 && config.maxTiltDeg > 0;
   }
 }

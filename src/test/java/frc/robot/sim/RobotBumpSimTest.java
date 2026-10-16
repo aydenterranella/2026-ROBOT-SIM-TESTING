@@ -15,7 +15,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Drives {@link RobotBumpSim} straight at the blue bump with a stand-in for MapleSim (constant
  * commanded X speed off the ramp, bump sim owns X on the ramp, same as Swerve.updateBumpSim()).
- * Crest speed is sqrt(2·g·h) ≈ 1.8 m/s, so 1 m/s should slide back and 2.5 m/s should cross.
+ * Coasting, crest speed is sqrt(2·g·h) ≈ 1.8 m/s, so 1 m/s should slide back and 2.5 m/s should
+ * cross; a robot that keeps driving climbs at 1 m/s.
  */
 class RobotBumpSimTest {
   private static final double DT = 0.02;
@@ -34,6 +35,14 @@ class RobotBumpSimTest {
   private record Result(double maxX, double finalX, double maxZ, double minPitch, boolean everOnRamp) {}
 
   private static Result drive(double commandedVx, double seconds) {
+    return drive(commandedVx, seconds, false);
+  }
+
+  /**
+   * @param driven true: the stand-in for MapleSim keeps pushing toward the commanded speed on the
+   *     ramp (up to 3 m/s² per loop), as the wheels do; false: it coasts at the bump sim's speed
+   */
+  private static Result drive(double commandedVx, double seconds, boolean driven) {
     RobotBumpSim sim = new RobotBumpSim(MODULES);
     // Y = 2.5 m is inside the lower blue bump's Y range.
     Pose2d pose = new Pose2d(3.0, 2.5, Rotation2d.kZero);
@@ -48,6 +57,7 @@ class RobotBumpSimTest {
         everOnRamp = true;
         pose = sim.getSimWorldPose(pose);
         vx = sim.getSimXVelocity();
+        if (driven) vx += Math.max(-3 * DT, Math.min(3 * DT, commandedVx - vx));
       } else {
         vx = commandedVx;
       }
@@ -73,6 +83,14 @@ class RobotBumpSimTest {
     assertTrue(r.maxZ() > 0.1, "robot never lifted: maxZ=" + r.maxZ());
     // Nose-up on the ascent is negative pitch in WPILib's convention.
     assertTrue(r.minPitch() < Math.toRadians(-5), "robot never pitched up: minPitch=" + r.minPitch());
+  }
+
+  @Test
+  void drivenRobotClimbsBumpBelowCoastingCrestSpeed() {
+    Result r = drive(1.0, 4.0, true);
+    assertTrue(r.everOnRamp(), "robot never touched the bump");
+    assertTrue(r.finalX() > BUMP_END_X + 0.5, "driven robot failed to climb at 1 m/s: finalX=" + r.finalX());
+    assertTrue(r.maxZ() > 0.1, "robot never lifted: maxZ=" + r.maxZ());
   }
 
   @Test
