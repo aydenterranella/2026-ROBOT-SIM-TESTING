@@ -1,0 +1,8 @@
+[
+  {"label": "dup X60", "path": "Shooter V2", "name": "Kraken X60 Brushless Motor", "box": {"xMin": -0.8, "xMax": 1.8, "yMin": -6.0, "yMax": -1.3, "zMin": 19.7, "zMax": 22.3}},
+  {"label": "turret gear", "path": "^Main Assembly / Main <1> / ", "name": "Spur Gear", "box": {"xMin": -14.5, "xMax": -5.5, "yMin": -1.0, "yMax": 6.5, "zMin": 16.4, "zMax": 19.2}},
+  {"label": "turret enc", "path": "^Main Assembly / Main <1> / ", "name": "Through Bore Encoder", "box": {"xMin": -14.5, "xMax": -5.5, "yMin": -1.0, "yMax": 6.5, "zMin": 16.4, "zMax": 19.2}},
+  {"label": "turret shaft", "path": "^Main Assembly / Main <1> / ", "name": "Rounded Hex [(][0-9]", "box": {"xMin": -14.5, "xMax": -5.5, "yMin": -1.0, "yMax": 6.5, "zMin": 16.4, "zMax": 19.2}},
+  {"label": "turret bearing", "path": "^Main Assembly / Main <1> / ", "name": "ID Bearing|Bronze Bushing", "box": {"xMin": -14.5, "xMax": -5.5, "yMin": -1.0, "yMax": 6.5, "zMin": 16.4, "zMax": 19.2}},
+  {"label": "turret spacer", "path": "^Main Assembly / Main <1> / ", "name": "Custom Spacer|Shaft End Screw", "box": {"xMin": -14.5, "xMax": -5.5, "yMin": -1.0, "yMax": 6.5, "zMin": 16.4, "zMax": 19.2}}
+]

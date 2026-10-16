@@ -11,10 +11,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.ctre.phoenix6.unmanaged.Unmanaged;
 import edu.wpi.first.hal.HAL;
 import edu.wpi.first.wpilibj.simulation.DriverStationSim;
-import frc.lib.team9410.subsystems.PositionSubsystem;
-import frc.lib.team9410.subsystems.VelocitySubsystem;
-import frc.robot.constants.IntakeConstants;
+import frc.powerlib.subsystems.AbsolutePositionSubsystem;
+import frc.powerlib.subsystems.PowerSubsystem;
+import frc.powerlib.subsystems.VelocitySubsystem;
+import frc.robot.constants.IntakeRollerConstants;
+import frc.robot.constants.IntakeWristConstants;
 import frc.robot.constants.ShooterConstants;
+import frc.robot.constants.ShooterHoodConstants;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -35,6 +38,8 @@ class MechanismSimTest {
   @BeforeAll
   static void setup() {
     assertTrue(HAL.initialize(500, 0));
+    // Same switch Robot() flips: real TalonFX/CANcoder devices instead of the kinematic IOSim.
+    PowerSubsystem.usePhysicsSimulation(true);
     DriverStationSim.setEnabled(true);
     DriverStationSim.notifyNewData();
   }
@@ -52,12 +57,14 @@ class MechanismSimTest {
 
   @Test
   void intakeWristDeploysAndStows() throws InterruptedException {
-    PositionSubsystem wrist = new PositionSubsystem(IntakeConstants.WRIST_CONFIG);
+    AbsolutePositionSubsystem wrist =
+        new AbsolutePositionSubsystem(IntakeWristConstants.INTAKE_WRIST_CONFIG);
+    assertTrue(wrist.isConfigured(), "wrist devices should configure in physics sim");
     ArmMechanismSim sim =
         new ArmMechanismSim(
             new ArmMechanismSim.Config(
                 "IntakeWrist",
-                IntakeConstants.WRIST_CONFIG,
+                IntakeWristConstants.INTAKE_WRIST_CONFIG,
                 INTAKE_WRIST_GEARBOX,
                 INTAKE_WRIST_J_KG_M2,
                 INTAKE_ARM_LENGTH_M,
@@ -68,37 +75,44 @@ class MechanismSimTest {
                 INTAKE_HARD_STOP_UP_ROT,
                 INTAKE_START_ROT),
             wrist.getPositionMotor());
+    Runnable step = () -> {
+      sim.update(LOOP_PERIOD_SECS);
+      wrist.periodic(); // PowerLib reads feedback into inputs here
+    };
 
-    // Note: PositionSubsystem's constructor immediately commands the default (idle) position,
-    // so the arm is already moving here. We only check that the TalonFX's fused reading agrees
-    // with the simulated arm.
-    run(0.5, () -> sim.update(LOOP_PERIOD_SECS));
+    // Note: AbsolutePositionSubsystem's constructor immediately commands the default (idle)
+    // position, so the arm is already moving here. We only check that the TalonFX's fused reading
+    // agrees with the simulated arm.
+    run(0.5, step);
+    wrist.periodic(); // inputs were read before the last sleep; refresh them
     assertEquals(sim.getPositionRotations(), wrist.getPositionRotations(), 0.01,
         "TalonFX should report the same position the sim wrote into the sensors");
 
     // Deploy.
-    wrist.setPositionRotations(IntakeConstants.INTAKE_MAX);
-    run(3.0, () -> sim.update(LOOP_PERIOD_SECS));
-    assertEquals(IntakeConstants.INTAKE_MAX, sim.getPositionRotations(), 0.02, "wrist should reach down");
+    wrist.setPositionRotations(IntakeWristConstants.INTAKE_MAX);
+    run(3.0, step);
+    wrist.periodic();
+    assertEquals(IntakeWristConstants.INTAKE_MAX, sim.getPositionRotations(), 0.02, "wrist should reach down");
     assertEquals(sim.getPositionRotations(), wrist.getPositionRotations(), 0.01,
         "sim and TalonFX should agree");
     assertEquals(Math.toDegrees(INTAKE_REF_ANGLE_RAD), Math.toDegrees(sim.getAngleRads()), 8.0,
         "deployed arm should be near horizontal, like the CAD");
 
     // Back to idle.
-    wrist.setPositionRotations(IntakeConstants.INTAKE_IDLE);
-    run(2.0, () -> sim.update(LOOP_PERIOD_SECS));
-    assertEquals(IntakeConstants.INTAKE_IDLE, sim.getPositionRotations(), 0.02, "wrist should reach idle");
+    wrist.setPositionRotations(IntakeWristConstants.INTAKE_IDLE);
+    run(2.0, step);
+    assertEquals(IntakeWristConstants.INTAKE_IDLE, sim.getPositionRotations(), 0.02, "wrist should reach idle");
   }
 
   @Test
   void hoodTracksSetpoint() throws InterruptedException {
-    PositionSubsystem hoodSubsystem = new PositionSubsystem(ShooterConstants.HOOD_CONFIG);
+    AbsolutePositionSubsystem hoodSubsystem =
+        new AbsolutePositionSubsystem(ShooterHoodConstants.SHOOTER_HOOD_CONFIG);
     ArmMechanismSim sim =
         new ArmMechanismSim(
             new ArmMechanismSim.Config(
                 "Hood",
-                ShooterConstants.HOOD_CONFIG,
+                ShooterHoodConstants.SHOOTER_HOOD_CONFIG,
                 HOOD_GEARBOX,
                 HOOD_J_KG_M2,
                 HOOD_ARM_LENGTH_M,
@@ -107,14 +121,20 @@ class MechanismSimTest {
                 HOOD_ARM_RAD_PER_MECH_RAD,
                 HOOD_HARD_STOP_DOWN_ROT,
                 HOOD_HARD_STOP_UP_ROT,
-                HOOD_START_ROT),
+                HOOD_START_ROT,
+                HOOD_ROTOR_PER_ARM_ROT),
             hoodSubsystem.getPositionMotor());
+    Runnable step = () -> {
+      sim.update(LOOP_PERIOD_SECS);
+      hoodSubsystem.periodic();
+    };
 
-    run(0.5, () -> sim.update(LOOP_PERIOD_SECS));
+    run(0.5, step);
 
-    double target = 0.10;
+    double target = 0.07; // middle of the shot table's hood range
     hoodSubsystem.setPositionRotations(target);
-    run(3.0, () -> sim.update(LOOP_PERIOD_SECS));
+    run(3.0, step);
+    hoodSubsystem.periodic();
     // Looser tolerance: kG is 0 in code, so gravity leaves a small steady-state droop.
     assertEquals(target, sim.getPositionRotations(), 0.02, "hood should reach the setpoint");
     assertEquals(sim.getPositionRotations(), hoodSubsystem.getPositionRotations(), 0.01,
@@ -123,7 +143,7 @@ class MechanismSimTest {
 
   @Test
   void flywheelSpinsUp() throws InterruptedException {
-    VelocitySubsystem shooter = new VelocitySubsystem(ShooterConstants.FLYWHEEL_CONFIG);
+    VelocitySubsystem shooter = new VelocitySubsystem(ShooterConstants.SHOOTER_CONFIG);
     RollerMechanismSim sim =
         new RollerMechanismSim(
             "Flywheel",
@@ -132,13 +152,49 @@ class MechanismSimTest {
             FLYWHEEL_J_KG_M2,
             FLYWHEEL_FRICTION_VOLTS);
 
-    double target = 75.0; // rps, middle of the shot LUT
+    double target = 33.0; // rps, middle of the shot table
     shooter.setVelocity(target);
-    run(2.0, () -> sim.update(LOOP_PERIOD_SECS));
+    run(2.0, () -> {
+      sim.update(LOOP_PERIOD_SECS);
+      shooter.periodic();
+    });
 
     assertEquals(target, sim.getVelocityRps(), 2.0, "flywheel should reach the setpoint");
-    assertEquals(sim.getVelocityRps(),
-        shooter.getVelocityMotor().getRotorVelocity().getValueAsDouble(), 1.0,
+    assertEquals(sim.getVelocityRps(), shooter.inputs.velocityRotationsPerSecond, 1.0,
         "TalonFX should report the simulated speed");
+  }
+
+  @Test
+  void stoppedRollerComesToRestWithoutChattering() throws InterruptedException {
+    // The light intake roller used to flip between ±0.9 rps every loop once stopped (friction
+    // carried it through zero each step), so Power Tool's tile kept changing sign.
+    VelocitySubsystem roller = new VelocitySubsystem(IntakeRollerConstants.INTAKE_ROLLER_CONFIG);
+    RollerMechanismSim sim =
+        new RollerMechanismSim(
+            "IntakeRoller",
+            roller.getVelocityMotor(),
+            INTAKE_ROLLER_GEARBOX,
+            INTAKE_ROLLER_J_KG_M2,
+            INTAKE_ROLLER_FRICTION_VOLTS);
+    Runnable step = () -> {
+      sim.update(LOOP_PERIOD_SECS);
+      roller.periodic();
+    };
+    roller.setVelocity(INTAKE_ROLLER_INTAKING_RPS);
+    run(1.0, step);
+    roller.stopVelocity();
+    roller.brake();
+    run(0.5, step);
+
+    int signChanges = 0;
+    double last = sim.getVelocityRps();
+    for (int i = 0; i < 25; i++) {
+      run(LOOP_PERIOD_SECS, step);
+      double now = sim.getVelocityRps();
+      if (Math.signum(now) != 0 && Math.signum(last) != 0 && Math.signum(now) != Math.signum(last)) signChanges++;
+      last = now;
+    }
+    assertEquals(0, signChanges, "stopped roller should not reverse back and forth");
+    assertEquals(0.0, sim.getVelocityRps(), 0.05, "stopped roller should be at rest");
   }
 }

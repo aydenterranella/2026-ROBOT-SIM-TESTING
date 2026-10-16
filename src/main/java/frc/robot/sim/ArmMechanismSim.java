@@ -14,13 +14,13 @@ import com.ctre.phoenix6.sim.CANcoderSimState;
 import com.ctre.phoenix6.sim.TalonFXSimState;
 import edu.wpi.first.math.system.plant.DCMotor;
 import edu.wpi.first.wpilibj.simulation.SingleJointedArmSim;
-import frc.lib.team9410.configs.PositionSubsystemConfig;
+import frc.powerlib.configs.AbsolutePositionSubsystemConfig;
 import frc.robot.Constants;
 import org.ironmaple.simulation.motorsims.SimulatedBattery;
 
 /**
  * Physics sim for a pivoting arm driven by a TalonFX with a fused CANcoder — the setup
- * {@link frc.lib.team9410.subsystems.PositionSubsystem} uses for the intake wrist and the hood.
+ * {@link frc.powerlib.subsystems.AbsolutePositionSubsystem} uses for the intake wrist and the hood.
  *
  * <h2>The three "units" in play</h2>
  * It helps to keep these straight when reading the code:
@@ -70,10 +70,13 @@ public class ArmMechanismSim {
    * @param hardStopLowRot lowest reachable code position (hard stop)
    * @param hardStopHighRot highest reachable code position (hard stop)
    * @param startPositionRot where the arm starts when the sim boots
+   * @param physicalRotorPerArmRot motor turns per arm turn from the real gear train, or 0 to derive
+   *     it from the code's sensor ratios. Only the physics uses it: the rotor sensor is still
+   *     written at the code's configured ratio, so the TalonFX reads its sensors as configured.
    */
   public record Config(
       String name,
-      PositionSubsystemConfig subsystemConfig,
+      AbsolutePositionSubsystemConfig subsystemConfig,
       DCMotor gearbox,
       double jKgMetersSquared,
       double armLengthMeters,
@@ -82,11 +85,21 @@ public class ArmMechanismSim {
       double armRadPerMechRad,
       double hardStopLowRot,
       double hardStopHighRot,
-      double startPositionRot) {}
+      double startPositionRot,
+      double physicalRotorPerArmRot) {
+    /** Gear train derived from the code's sensor ratios. */
+    public Config(String name, AbsolutePositionSubsystemConfig subsystemConfig, DCMotor gearbox,
+        double jKgMetersSquared, double armLengthMeters, double refPositionRot, double refAngleRad,
+        double armRadPerMechRad, double hardStopLowRot, double hardStopHighRot, double startPositionRot) {
+      this(name, subsystemConfig, gearbox, jKgMetersSquared, armLengthMeters, refPositionRot, refAngleRad,
+          armRadPerMechRad, hardStopLowRot, hardStopHighRot, startPositionRot, 0.0);
+    }
+  }
 
   /**
-   * PositionSubsystem hard-codes the CANcoder to Clockwise_Positive, which flips the sign of the
-   * raw reading. Keep this in sync if that library code ever changes.
+   * AbsolutePositionSubsystem hard-codes the CANcoder to Clockwise_Positive (see its
+   * encoderConfiguration), which flips the sign of the raw reading. Keep this in sync if that
+   * library code ever changes.
    */
   private static final double CANCODER_DIRECTION_SIGN = -1.0;
 
@@ -105,7 +118,7 @@ public class ArmMechanismSim {
 
   /**
    * @param config arm description
-   * @param leader the subsystem's position motor ({@code PositionSubsystem.getPositionMotor()})
+   * @param leader the subsystem's position motor ({@code AbsolutePositionSubsystem.getPositionMotor()})
    */
   public ArmMechanismSim(Config config, TalonFX leader) {
     this.config = config;
@@ -130,9 +143,10 @@ public class ArmMechanismSim {
         talonInvertSign * Math.signum(rotorToSensor) * Math.signum(config.armRadPerMechRad());
 
     // Motor rotations per ARM rotation. Example (intake): 44.44 rotor turns per CANcoder turn,
-    // CANcoder 1:1 with the arm → 44.44.
-    double gearing =
-        Math.abs(rotorToSensor * sensorToMechanism) / Math.abs(config.armRadPerMechRad());
+    // CANcoder 1:1 with the arm → 44.44. A CAD-measured gear train overrides that.
+    double gearing = config.physicalRotorPerArmRot() > 0
+        ? config.physicalRotorPerArmRot()
+        : Math.abs(rotorToSensor * sensorToMechanism) / Math.abs(config.armRadPerMechRad());
 
     double angleA = angleFromPosition(config.hardStopLowRot());
     double angleB = angleFromPosition(config.hardStopHighRot());

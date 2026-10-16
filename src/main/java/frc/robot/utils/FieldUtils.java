@@ -1,32 +1,20 @@
 package frc.robot.utils;
 
-import edu.wpi.first.math.geometry.Pose2d;
 import frc.robot.Constants;
 
-public class FieldUtils {
-  public static enum GameZone {
-    RED_ALLIANCE, // max, max
-    NEUTRAL,
-    BLUE_ALLIANCE, // 0,0
-    INTERCHANGE // not in any specific zone, between alliance and neutral aka going over bump
-  }
+import edu.wpi.first.math.geometry.Pose2d;
+import frc.powerlib.health.HealthChecks;
+
+public final class FieldUtils {
+  public enum GameZone { RED_ALLIANCE, NEUTRAL, BLUE_ALLIANCE, INTERCHANGE }
+  private FieldUtils() {}
 
   public static GameZone getZone(Pose2d pose) {
+    if (!HealthChecks.finitePose(pose)) return GameZone.INTERCHANGE;
     double x = pose.getX();
-
-    if (Constants.Field.BLUE_START_X < x && Constants.Field.BLUE_END_X > x) {
-      return GameZone.BLUE_ALLIANCE;
-    }
-
-    if (Constants.Field.CENTER_START_X < x && Constants.Field.CENTER_END_X > x) {
-      return GameZone.NEUTRAL;
-    }
-
-    if (Constants.Field.RED_START_X < x && Constants.Field.RED_END_X > x) {
-      return GameZone.RED_ALLIANCE;
-    }
-
+    if (x > Constants.Shooting.BLUE_ZONE_START && x < Constants.Shooting.BLUE_ZONE_END) return GameZone.BLUE_ALLIANCE;
+    if (x > Constants.Shooting.RED_ZONE_START && x < Constants.Shooting.RED_ZONE_END) return GameZone.RED_ALLIANCE;
+    if (x > Constants.Shooting.CENTER_ZONE_START && x < Constants.Shooting.CENTER_ZONE_END) return GameZone.NEUTRAL;
     return GameZone.INTERCHANGE;
   }
-
 }
